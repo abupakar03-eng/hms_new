@@ -1,0 +1,5186 @@
+import React, { useState, useEffect, useRef } from 'react';
+import axios from 'axios';
+import { 
+  Users, UserPlus, FileText, Clipboard, Search, CheckCircle, Clock, Calendar, Activity, Pill, PlusCircle, ShoppingCart, TestTube, LogOut, FileDigit, Bed, Home, Stethoscope, BriefcaseMedical, FlaskConical, Database, UserRound, ArrowRightCircle,
+  ShoppingBag, Printer, AlertTriangle, DollarSign, BarChart2, Download,
+  Building2, Receipt, Settings, Shield,
+  Save, RefreshCw, UploadCloud, DownloadCloud,
+  Sun, Moon, Loader2, CheckCircle2, List, Eye, Edit, Trash2, X, Plus, ChevronDown
+} from 'lucide-react';
+import Select from 'react-select';
+
+const selectStyles = {
+  control: (base: any, state: any) => ({
+    ...base,
+    backgroundColor: 'var(--bg-input)',
+    borderColor: state.isFocused ? 'var(--border-focus)' : 'var(--input-border)',
+    color: 'var(--text-primary)',
+    boxShadow: state.isFocused ? '0 0 0 3px var(--primary-glow)' : 'none',
+    minHeight: '40px',
+    '&:hover': { borderColor: 'var(--border-focus)' }
+  }),
+  menu: (base: any) => ({ ...base, backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', zIndex: 100 }),
+  option: (base: any, state: any) => ({
+    ...base,
+    backgroundColor: state.isFocused ? 'var(--bg-card-hover)' : 'transparent',
+    color: 'var(--text-primary)',
+    '&:active': { backgroundColor: 'var(--primary-glow)' }
+  }),
+  singleValue: (base: any) => ({ ...base, color: 'var(--text-primary)' }),
+  input: (base: any) => ({ ...base, color: 'var(--text-primary)' })
+};
+
+const API_BASE = "http://127.0.0.1:8000";
+
+const HOSPITAL_LAYOUT = [
+  { name: 'General Ward', prefix: 'GW', beds: 10 },
+  { name: 'ICU', prefix: 'ICU', beds: 5 },
+  { name: 'Private Rooms', prefix: 'PR', beds: 5 },
+];
+
+interface Patient {
+  id: number;
+  name: string;
+  age: number;
+  gender: string;
+  phone?: string;
+  address?: string;
+  aadhaar?: string;
+  blood_group?: string;
+  details?: Record<string, any>;
+  created_at: string;
+}
+
+interface OPToken {
+  id: number;
+  patient_id: number;
+  token_number: number;
+  session: string;
+  date: string;
+  status: string;
+  fee: number;
+  is_billed: boolean;
+  details?: Record<string, any>;
+  patient?: Patient;
+}
+
+interface Appointment {
+  id: number;
+  patient_id: number;
+  doctor_id?: number;
+  appointment_date: string;
+  time_slot?: string;
+  reason?: string;
+  status: string;
+  details?: Record<string, any>;
+  patient?: Patient;
+}
+
+interface MedicineStock {
+  id: number;
+  name: string;
+  category: string;
+  batch_no?: string;
+  expiry_date?: string;
+  quantity: number;
+  unit_price: number;
+  min_stock_level: number;
+}
+
+interface PharmacyBillItem {
+  id?: number;
+  medicine_id: number;
+  medicine_name: string;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
+}
+
+interface PharmacyBill {
+  id: number;
+  patient_id?: number;
+  patient_name?: string;
+  bill_date: string;
+  subtotal: number;
+  discount: number;
+  gst: number;
+  total: number;
+  items: PharmacyBillItem[];
+  patient?: Patient;
+}
+
+interface IPAdmission {
+  id: number;
+  patient_id: number;
+  admission_date: string;
+  ward_number?: string;
+  room_number?: string;
+  doctor_in_charge?: string;
+  discharge_date?: string;
+  status: string;
+  reason_for_admission?: string;
+  patient?: Patient;
+}
+
+interface LabReport {
+  id: number;
+  patient_id: number;
+  test_name: string;
+  result_value?: string;
+  normal_range?: string;
+  units?: string;
+  date_conducted: string;
+  reported_by?: string;
+  remarks?: string;
+  results_data?: any;
+  patient?: Patient;
+}
+
+interface LabTestMaster {
+  id: number;
+  test_code: string;
+  test_name: string;
+  category?: string;
+  department?: string;
+  sample_type?: string;
+  unit?: string;
+  reference_range?: string;
+  normal_range_male?: string;
+  normal_range_female?: string;
+  normal_range_child?: string;
+  price: number;
+  tat_hours: number;
+  is_active: boolean;
+}
+
+interface LabOrder {
+  id: number;
+  patient_id: number;
+  doctor_name?: string;
+  test_id: number;
+  order_date: string;
+  status: string;
+  patient?: Patient;
+  test?: LabTestMaster;
+}
+
+interface LabSample {
+  id: number;
+  order_id: number;
+  sample_type: string;
+  collection_date?: string;
+  collected_by?: string;
+  status: string;
+  order?: LabOrder;
+}
+
+interface OPBill {
+  id: number;
+  patient_id: number;
+  token_id?: number;
+  bill_date: string;
+  doctor_name?: string;
+  department?: string;
+  consultation_fee: number;
+  lab_charges: number;
+  pharmacy_charges: number;
+  other_charges: {name: string; amount: number}[];
+  subtotal: number;
+  discount: number;
+  gst: number;
+  total: number;
+  payment_mode: string;
+  payment_details?: Record<string, number>;
+  notes?: string;
+  patient?: Patient;
+}
+
+interface IPBill {
+  id: number;
+  patient_id: number;
+  admission_id?: number;
+  bill_date: string;
+  doctor_name?: string;
+  room_charge_per_day: number;
+  days_stayed: number;
+  room_charges: number;
+  doctor_charges: number;
+  nursing_charges: number;
+  pharmacy_charges: number;
+  lab_charges: number;
+  other_charges: {name: string; amount: number}[];
+  subtotal: number;
+  discount: number;
+  gst: number;
+  total: number;
+  payment_mode: string;
+  payment_details?: Record<string, number>;
+  notes?: string;
+  patient?: Patient;
+}
+
+interface SearchResultItem {
+  type: string;
+  id: number;
+  patient_id?: number;
+  patient_name?: string;
+  detail: string;
+  date?: string;
+  amount?: number;
+}
+
+interface DailyReport {
+  date: string;
+  op_revenue: number;
+  ip_revenue: number;
+  pharmacy_revenue: number;
+  lab_revenue: number;
+  total_revenue: number;
+  total_patients: number;
+  total_bills: number;
+}
+
+interface User {
+  id: number;
+  username: string;
+  role: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+const SearchableDropdown = ({ options, value, onChange, placeholder, renderOption, searchKeys = ['label'] }: any) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: any) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) setIsOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const filteredOptions = options.filter((opt: any) => 
+    searchKeys.some((key: string) => opt[key]?.toString().toLowerCase().includes(search.toLowerCase()))
+  );
+
+  const selectedOpt = options.find((o: any) => o.value === value);
+
+  return (
+    <div ref={wrapperRef} style={{ position: 'relative', width: '100%' }}>
+      <div 
+        onClick={() => setIsOpen(!isOpen)}
+        style={{ padding: '8px', border: '1px solid #cbd5e1', borderRadius: '4px', background: 'white', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+      >
+        <span>{selectedOpt ? (renderOption ? renderOption(selectedOpt) : selectedOpt.label) : placeholder}</span>
+        <ChevronDown size={16} />
+      </div>
+      {isOpen && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #cbd5e1', borderRadius: '4px', zIndex: 100, maxHeight: '300px', overflowY: 'auto', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
+          <div style={{ padding: '8px', position: 'sticky', top: 0, background: 'white', borderBottom: '1px solid #e2e8f0' }}>
+            <input 
+              type="text" 
+              placeholder="Type to search..." 
+              value={search} 
+              onChange={e => setSearch(e.target.value)}
+              style={{ width: '100%', padding: '6px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+              autoFocus
+            />
+          </div>
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map((opt: any, index: number) => (
+              <div 
+                key={index}
+                onClick={() => { onChange(opt.value); setIsOpen(false); setSearch(''); }}
+                style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
+                onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#f8fafc')}
+                onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+              >
+                {renderOption ? renderOption(opt) : opt.label}
+              </div>
+            ))
+          ) : (
+            <div style={{ padding: '8px', color: '#94a3b8', textAlign: 'center' }}>No results found</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+const LabPatientHeader = ({ patients, selectedId, onChange, labOrders, ipAdmissions }: any) => {
+  const patientOptions = patients.map((p: any) => ({
+    label: `${p.id} - ${p.name} - ${p.phone}`,
+    value: p.id,
+    id: p.id,
+    name: p.name,
+    phone: p.phone,
+    uhid: p.aadhaar || '',
+  }));
+
+  const selectedPatient = patients.find((p: any) => p.id === selectedId);
+  
+  // Try to find recent order to get Doctor/Dept
+  const recentOrder = labOrders.filter((o: any) => o.patient_id === selectedId).sort((a: any, b: any) => b.id - a.id)[0];
+  const isIP = ipAdmissions.some((a: any) => a.patient_id === selectedId && a.status === 'Admitted');
+  
+  return (
+    <div className="glass-card" style={{ marginBottom: '20px', padding: '15px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '20px', alignItems: 'start' }}>
+        <div>
+          <label style={{ fontWeight: 'bold', marginBottom: '8px', display: 'block' }}>Search & Select Patient</label>
+          <SearchableDropdown 
+            options={patientOptions}
+            value={selectedId}
+            onChange={onChange}
+            placeholder="Search ID, Name, Mobile, UHID..."
+            searchKeys={['id', 'name', 'phone', 'uhid']}
+          />
+        </div>
+        {selectedPatient && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', backgroundColor: '#f8fafc', padding: '15px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+            <div><small style={{color:'#64748b'}}>Patient Name</small><br/><b>{selectedPatient.name}</b></div>
+            <div><small style={{color:'#64748b'}}>ID / UHID</small><br/><b>{selectedPatient.id} / {selectedPatient.aadhaar || 'N/A'}</b></div>
+            <div><small style={{color:'#64748b'}}>Age / Gender</small><br/><b>{selectedPatient.age} / {selectedPatient.gender}</b></div>
+            <div><small style={{color:'#64748b'}}>Mobile / Blood</small><br/><b>{selectedPatient.phone} / {selectedPatient.blood_group || 'N/A'}</b></div>
+            <div><small style={{color:'#64748b'}}>Visit Type</small><br/><b>{isIP ? 'IP Admission' : 'OP Visit'}</b></div>
+            <div><small style={{color:'#64748b'}}>Doctor</small><br/><b>{recentOrder ? recentOrder.doctor_name || 'Walk-in' : 'N/A'}</b></div>
+            <div><small style={{color:'#64748b'}}>Visit Date</small><br/><b>{recentOrder ? new Date(recentOrder.created_at || Date.now()).toLocaleDateString() : 'N/A'}</b></div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default function App() {
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
+  const [globalLoading, setGlobalLoading] = useState(false);
+  const [toast, setToast] = useState<{message:string, type:'success'|'error'} | null>(null);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const showToast = (message: string, type: 'success'|'error' = 'success') => {
+    setToast({message, type});
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  useEffect(() => {
+    const reqInterceptor = axios.interceptors.request.use(config => { setGlobalLoading(true); return config; });
+    const resInterceptor = axios.interceptors.response.use(
+      response => { setGlobalLoading(false); return response; },
+      error => { 
+        setGlobalLoading(false); 
+        let errorMsg = 'An error occurred';
+        if (error.response?.data?.detail) {
+          const detail = error.response.data.detail;
+          if (Array.isArray(detail)) {
+            errorMsg = detail.map((err: any) => err.msg || err.type).join(', ');
+          } else if (typeof detail === 'string') {
+            errorMsg = detail;
+          }
+        }
+        showToast(errorMsg, 'error'); 
+        return Promise.reject(error); 
+      }
+    );
+    return () => {
+      axios.interceptors.request.eject(reqInterceptor);
+      axios.interceptors.response.eject(resInterceptor);
+    };
+  }, []);
+
+  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  
+  const exportToCSV = (data: any[], filename: string) => {
+    if(!data.length) return;
+    const headers = Object.keys(data[0]).join(',');
+    const rows = data.map(obj => Object.values(obj).map(v => `"${v}"`).join(',')).join('\n');
+    const csvContent = "data:text/csv;charset=utf-8," + headers + "\n" + rows;
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const [patientSearch, setPatientSearch] = useState("");
+  const [inventorySearch, setInventorySearch] = useState("");
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+  
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [tokens, setTokens] = useState<OPToken[]>([]);
+  const [inventory, setInventory] = useState<MedicineStock[]>([]);
+  const [pharmacyBills, setPharmacyBills] = useState<PharmacyBill[]>([]);
+  const [ipAdmissions, setIpAdmissions] = useState<IPAdmission[]>([]);
+  const [labReports, setLabReports] = useState<LabReport[]>([]);
+  const [labTestMasters, setLabTestMasters] = useState<LabTestMaster[]>([]);
+  const [labOrders, setLabOrders] = useState<LabOrder[]>([]);
+  const [labSamples, setLabSamples] = useState<LabSample[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  // New state for billing & reports
+  const [opBills, setOpBills] = useState<OPBill[]>([]);
+  const [ipBills, setIpBills] = useState<IPBill[]>([]);
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Reports state
+  const [reportType, setReportType] = useState('daily');
+  const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
+  const [reportMonth, setReportMonth] = useState(new Date().getMonth() + 1);
+  const [reportYear, setReportYear] = useState(new Date().getFullYear());
+  const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
+  const [monthlyReport, setMonthlyReport] = useState<DailyReport[]>([]);
+  const [yearlyReport, setYearlyReport] = useState<any[]>([]);
+  const [revenueReport, setRevenueReport] = useState<any>(null);
+  const [doctorReport, setDoctorReport] = useState<any[]>([]);
+  const [medicineSalesReport, setMedicineSalesReport] = useState<any[]>([]);
+  const [departmentWiseReport, setDepartmentWiseReport] = useState<any[]>([]);
+  const [patientReportData, setPatientReportData] = useState<any>(null);
+  const [patientReportId, setPatientReportId] = useState<string>('');
+  const [medicineStockReport, setMedicineStockReport] = useState<any[]>([]);
+  const [labSummaryReport, setLabSummaryReport] = useState<any[]>([]);
+  const [dischargeReport, setDischargeReport] = useState<any[]>([]);
+  // Dashboard stats & charts
+  const [dashStats, setDashStats] = useState<any>(null);
+  const [dashCharts, setDashCharts] = useState<any>(null);
+  // Admin Settings
+  const [hospitalSettings, setHospitalSettings] = useState<Record<string,string>>({
+    hospital_name: 'MedBill Pro Hospital',
+    gst_number: '33AAAAA0000A1Z5',
+    address: '123 Healthcare Street, Chennai - 600001',
+    contact: '+91 99999 99999',
+    email: 'info@medbillpro.com',
+    receipt_header: 'Thank you for visiting our hospital',
+    receipt_footer: 'Get well soon! This is a computer generated receipt.',
+    paper_size: 'A4',
+    font_size: '12',
+  });
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+  const [adminSettingsTab, setAdminSettingsTab] = useState('hospital_info');
+  // Billing sub-tab
+  const [billingTab, setBillingTab] = useState('op');
+  // OP Bill Form
+  const [opBillForm, setOpBillForm] = useState({
+    patient_id: '', token_id: '', doctor_name: '', department: '',
+    consultation_fee: 0, lab_charges: 0, pharmacy_charges: 0,
+    discount: 0, gst: 5, payment_mode: 'Cash', notes: ''
+  });
+  const [opOtherCharges, setOpOtherCharges] = useState<{name: string; amount: number}[]>([]);
+  const [opSplitPayment, setOpSplitPayment] = useState({cash: 0, upi: 0, card: 0, bank: 0});
+  // IP Bill Form
+  const [ipBillForm, setIpBillForm] = useState({
+    patient_id: '', admission_id: '', doctor_name: '',
+    room_charge_per_day: 0, days_stayed: 1, doctor_charges: 0,
+    nursing_charges: 0, pharmacy_charges: 0, lab_charges: 0,
+    discount: 0, gst: 5, payment_mode: 'Cash', notes: ''
+  });
+  const [ipOtherCharges, setIpOtherCharges] = useState<{name: string; amount: number}[]>([]);
+  const [ipSplitPayment, setIpSplitPayment] = useState({cash: 0, upi: 0, card: 0, bank: 0});
+  const [viewBillDetail, setViewBillDetail] = useState<any>(null);
+
+  // Global Lab State
+  const [selectedGlobalLabPatientId, setSelectedGlobalLabPatientId] = useState<number | null>(null);
+  const [globalLabPatientDetails, setGlobalLabPatientDetails] = useState<any>(null);
+  const [globalLabLoading, setGlobalLabLoading] = useState(false);
+
+
+  // Doctor Module Global States
+  const [selectedDoctorPatientId, setSelectedDoctorPatientId] = useState<number | null>(null);
+  const [doctorLabOrders, setDoctorLabOrders] = useState<any[]>([]); // To hold transient multiple lab orders selected by doctor
+  
+  // Lab Direct Orders States
+
+  const [isLabRegistrationModalOpen, setIsLabRegistrationModalOpen] = useState(false);
+  const [isLabOrderModalOpen, setIsLabOrderModalOpen] = useState(false);
+  const [labDirectOrderPatientId, setLabDirectOrderPatientId] = useState<number | null>(null);
+  const [labDirectOrderForm, setLabDirectOrderForm] = useState({ test_id: '', referring_doctor: 'Walk-in / Self' });
+
+  // Lab Orders Workflow States
+  const [labSearchQuery, setLabSearchQuery] = useState('');
+  const [labFilterStatus, setLabFilterStatus] = useState('All');
+  const [selectedViewOrder, setSelectedViewOrder] = useState<any>(null);
+  const [selectedEditOrder, setSelectedEditOrder] = useState<any>(null);
+  const [selectedCollectSampleOrder, setSelectedCollectSampleOrder] = useState<any>(null);
+  const [selectedResultEntryOrder, setSelectedResultEntryOrder] = useState<any>(null);
+
+  const [editOrderForm, setEditOrderForm] = useState({ priority: 'Routine', remarks: '' });
+  const [collectSampleForm, setCollectSampleForm] = useState({ barcode: '', collected_by: '', sample_type: '', container_type: '', remarks: '' });
+  const [resultEntryForm, setResultEntryForm] = useState<{parameter: string, result: string, unit: string, range: string, flag: string}[]>([]);
+
+  // Axios Interceptor for Auth
+  useEffect(() => {
+    const reqInterceptor = axios.interceptors.request.use(config => {
+      const currentToken = localStorage.getItem('token');
+      if (currentToken) {
+        config.headers.Authorization = `Bearer ${currentToken}`;
+      }
+      return config;
+    });
+    
+    const resInterceptor = axios.interceptors.response.use(
+      response => response,
+      async error => {
+        const originalRequest = error.config;
+        if (error.response && error.response.status === 401 && !originalRequest._retry) {
+          originalRequest._retry = true;
+          try {
+            const refreshToken = localStorage.getItem('refresh_token');
+            if (refreshToken) {
+              const res = await axios.post(`${API_BASE}/refresh-token?refresh_token=${refreshToken}`);
+              const newToken = res.data.access_token;
+              localStorage.setItem('token', newToken);
+              setToken(newToken);
+              axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
+              return axios(originalRequest);
+            } else {
+              handleLogout();
+            }
+          } catch (refreshError) {
+            handleLogout();
+          }
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    return () => {
+      axios.interceptors.request.eject(reqInterceptor);
+      axios.interceptors.response.eject(resInterceptor);
+    };
+  }, [token]);
+
+  // Load Current User on Token Change
+  useEffect(() => {
+    if (token) {
+      axios.get(`${API_BASE}/users/me`)
+        .then(res => {
+          setCurrentUser(res.data);
+          const role = res.data.role;
+          if (role === 'Pharmacy') setActiveTab('pharmacy');
+          else if (role === 'Laboratory') setActiveTab('lab_reports');
+          else if (role === 'Doctor') setActiveTab('casesheet');
+          else if (role === 'Receptionist') setActiveTab('patients');
+          else setActiveTab('dashboard'); // Admin
+        })
+        .catch(() => handleLogout());
+    }
+  }, [token]);
+
+  const handleLogout = async () => {
+    try {
+      if (token) {
+        await axios.post(`${API_BASE}/logout`);
+      }
+    } catch (e) {
+      console.error("Logout failed or token already invalid", e);
+    }
+    setToken(null);
+    setCurrentUser(null);
+    localStorage.removeItem('token');
+    localStorage.removeItem('refresh_token');
+    axios.defaults.headers.common['Authorization'] = '';
+  };
+  
+  // IP Admission Form
+  const [selectedWardTab, setSelectedWardTab] = useState('GW'); // Default to General Ward prefix
+  const [ipAdmissionForm, setIpAdmissionForm] = useState({
+    patient_id: '', ward_number: 'General Ward', room_number: '', doctor_in_charge: '', reason_for_admission: ''
+  });
+
+  // Lab Report Form (Legacy)
+  const [labReportForm, setLabReportForm] = useState({
+    patient_id: '', test_name: '', result_value: '', normal_range: '', units: '', reported_by: '', remarks: ''
+  });
+  
+  // New Lab Forms
+  const [labTestMasterForm, setLabTestMasterForm] = useState({
+    test_code: '', test_name: '', category: 'Pathology', department: '', sample_type: 'Blood', unit: '', reference_range: '', normal_range_male: '', normal_range_female: '', normal_range_child: '', price: 0, tat_hours: 24, is_active: true
+  });
+  const [selectedTestMasterId, setSelectedTestMasterId] = useState<number | null>(null);
+  const [labOrderForm, setLabOrderForm] = useState({
+    patient_id: '', doctor_name: '', test_id: ''
+  });
+  const [labResultParams, setLabResultParams] = useState<{ [key: string]: { value: string, flag: string, remarks: string } }>({});
+  
+  // Forms & Selections
+  const [selectedPatientId, setSelectedPatientId] = useState<number | ''>('');
+  const [opSession, setOpSession] = useState<'Morning' | 'Evening'>('Morning');
+  const [opFee, setOpFee] = useState<number>(150);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [tokenForm, setTokenForm] = useState({
+    department: 'General', consultation_type: 'Routine', is_emergency: false, doctor_id: ''
+  });
+  const [appointmentForm, setAppointmentForm] = useState({
+    patient_id: '', doctor_id: '', appointment_date: new Date().toISOString().split('T')[0], time_slot: '10:00 AM', reason: ''
+  });
+  
+  // Registration Form
+  const [patientForm, setPatientForm] = useState({
+    name: '', age: 0, gender: 'Male', phone: '', address: '', aadhaar: '', blood_group: '',
+    occupation: '', marital_status: 'Single', guardian_name: '', emergency_contact: '', insurance_details: '', referral_doctor: '', patient_category: 'General', registration_type: 'Walk-in'
+  });
+
+  // Casesheet Form
+  const [selectedOPToken, setSelectedOPToken] = useState<OPToken | null>(null);
+  const [casesheetForm, setCasesheetForm] = useState({
+    vitalsBp: '', vitalsPulse: '', vitalsTemp: '', vitalsResp: '',
+    chiefComplaint: '', hpi: '', pmh: '', familyHistory: '', allergies: '',
+    clinicalFindings: '', diagnosis: '', icdCode: '', treatmentPlan: '', advice: '', followUpDate: ''
+  });
+  const [casesheetMeds, setCasesheetMeds] = useState<any[]>([]);
+  const [newMed, setNewMed] = useState({ 
+    medicine_id: 0, quantity: 1, duration: '', instructions: '',
+    timing_morning: false, timing_afternoon: false, timing_night: false, timing_relation: 'After Food'
+  });
+  const [casesheetLabs, setCasesheetLabs] = useState<string[]>([]);
+
+  // Pharmacy Billing
+  const [billingPatientType, setBillingPatientType] = useState<'walkin' | 'registered'>('walkin');
+  const [billingPatientId, setBillingPatientId] = useState<number | ''>('');
+  const [billingWalkInName, setBillingWalkInName] = useState('');
+  const [billingCart, setBillingCart] = useState<{ medicine_id: number; name: string; quantity: number; unit_price: number }[]>([]);
+  const [billingNewItem, setBillingNewItem] = useState({ medicine_id: 0, quantity: 1 });
+  const [billingDiscount, setBillingDiscount] = useState<number>(0);
+  const [billingGst, setBillingGst] = useState<number>(18);
+  const [viewInvoice, setViewInvoice] = useState<PharmacyBill | null>(null);
+  const [barcodeInput, setBarcodeInput] = useState('');
+
+  // Inventory Stock In
+  const [inventoryForm, setInventoryForm] = useState({
+    name: '', category: 'Pharmacy', batch_no: '', expiry_date: '', quantity: 0, unit_price: 0, min_stock_level: 10,
+    details: {
+      medicineCode: '', genericName: '', brandName: '', manufacturer: '', hsnCode: '', gstPercent: 12,
+      mrp: 0, purchasePrice: 0, rackNumber: '', storageLocation: '', maxStock: 100, barcode: '',
+      medicineImage: '', description: '', dosageForm: '', strength: '', scheduleType: ''
+    }
+  });
+
+  // Inventory Stock In (GRN)
+  const [grnForm, setGrnForm] = useState({
+    medicine_id: '', quantity: 1, type: 'Stock In', notes: '', 
+    details: { supplierName: '', invoiceNumber: '', purchaseOrder: '' }
+  });
+
+  // User Management Form
+  const [userForm, setUserForm] = useState({
+    username: '', password: '', role: 'Receptionist'
+  });
+
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userForm.username || !userForm.password) return showToast("Username and password required", "error");
+    try {
+      await axios.post(`${API_BASE}/users/`, userForm);
+      showToast("User created successfully", "success");
+      setUserForm({ username: '', password: '', role: 'Receptionist' });
+      loadUsers();
+    } catch (err: any) {
+      console.error(err);
+    }
+  };
+
+
+  const handleDeletePatient = async (id: number) => {
+    if (!window.confirm("Are you sure you want to delete this patient?")) return;
+    try {
+      await axios.delete(`${API_BASE}/patients/${id}`);
+      showToast("Patient deleted successfully", "success");
+      loadAllData();
+    } catch (err: any) {
+      console.error(err);
+      alert(err.response?.data?.detail || "Failed to delete patient");
+    }
+  };
+
+  const handleDeleteMedicineStock = async (id: number) => {
+    if (!window.confirm("Are you sure you want to delete this medicine?")) return;
+    try {
+      await axios.delete(`${API_BASE}/inventory/${id}`);
+      showToast("Medicine deleted successfully", "success");
+      loadAllData();
+    } catch (err: any) {
+      console.error(err);
+      alert(err.response?.data?.detail || "Failed to delete medicine");
+    }
+  };
+
+  const handleDeleteLabReport = async (id: number) => {
+    if (!window.confirm("Are you sure you want to delete this report?")) return;
+    try {
+      await axios.delete(`${API_BASE}/lab-reports/${id}`);
+      showToast("Report deleted successfully", "success");
+      loadAllData();
+    } catch (err: any) {
+      console.error(err);
+      alert(err.response?.data?.detail || "Failed to delete report");
+    }
+  };
+
+  const handleDeleteAppointment = async (id: number) => {
+    if (!window.confirm("Are you sure you want to delete this appointment?")) return;
+    try {
+      await axios.delete(`${API_BASE}/appointments/${id}`);
+      showToast("Appointment deleted successfully", "success");
+      loadAllData();
+    } catch (err: any) {
+      console.error(err);
+      alert(err.response?.data?.detail || "Failed to delete appointment");
+    }
+  };
+
+  const handleDeleteUser = async (userId: number) => {
+    if (!window.confirm("Are you sure you want to delete this user?")) return;
+    try {
+      await axios.delete(`${API_BASE}/users/${userId}`);
+      showToast("User deleted successfully", "success");
+      loadUsers();
+    } catch (err) {
+      console.error("Failed to delete user", err);
+    }
+  };
+
+  // Load Data
+  const loadAllData = async () => {
+    try {
+      const pats = await axios.get(`${API_BASE}/patients/`);
+      setPatients(pats.data);
+      
+      const toks = await axios.get(`${API_BASE}/tokens/`);
+      setTokens(toks.data);
+      
+      const inv = await axios.get(`${API_BASE}/inventory/`);
+      setInventory(inv.data);
+      
+      const bills = await axios.get(`${API_BASE}/billing/pharmacy/`);
+      setPharmacyBills(bills.data);
+      
+      const ip = await axios.get(`${API_BASE}/ip-admissions/`);
+      setIpAdmissions(ip.data);
+      
+      const labs = await axios.get(`${API_BASE}/lab-reports/`);
+      setLabReports(labs.data);
+
+      const masters = await axios.get(`${API_BASE}/lab-test-masters/`);
+      setLabTestMasters(masters.data);
+
+      const orders = await axios.get(`${API_BASE}/lab-orders/`);
+      setLabOrders(orders.data);
+
+      const samples = await axios.get(`${API_BASE}/lab-samples/`);
+      setLabSamples(samples.data);
+
+      const opb = await axios.get(`${API_BASE}/billing/op/`);
+      setOpBills(opb.data);
+
+      const ipb = await axios.get(`${API_BASE}/billing/ip/`);
+      setIpBills(ipb.data);
+
+      const appts = await axios.get(`${API_BASE}/appointments/`);
+      setAppointments(appts.data);
+    } catch (e) {
+      console.error("Error loading data from API:", e);
+    }
+  };
+
+  const loadDashboardData = async () => {
+    try {
+      const stats = await axios.get(`${API_BASE}/dashboard/stats`);
+      setDashStats(stats.data);
+      const charts = await axios.get(`${API_BASE}/dashboard/charts`);
+      setDashCharts(charts.data);
+    } catch (e) { console.error('Dashboard load error:', e); }
+  };
+
+  const loadHospitalSettings = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/hospital-settings/`);
+      if (res.data && Object.keys(res.data).length > 0) setHospitalSettings(prev => ({...prev, ...res.data}));
+    } catch (e) { console.error(e); }
+  };
+
+  const loadAuditLogs = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/audit-logs/`);
+      setAuditLogs(res.data);
+    } catch (e) { console.error(e); }
+  };
+
+  const saveHospitalSettings = async () => {
+    try {
+      const settings = Object.entries(hospitalSettings).map(([key, value]) => ({ key, value }));
+      await axios.post(`${API_BASE}/hospital-settings/`, { settings });
+      setSettingsSaved(true);
+      setTimeout(() => setSettingsSaved(false), 3000);
+    } catch (e) { alert('Failed to save settings'); }
+  };
+
+  const handleBackupDatabase = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/backup/`);
+      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `hospital_backup_${new Date().toISOString().split('T')[0]}.json`;
+      a.click(); URL.revokeObjectURL(url);
+    } catch (e) { alert('Backup failed'); }
+  };
+
+  useEffect(() => {
+    loadAllData();
+    loadDashboardData();
+    loadHospitalSettings();
+  }, []);
+
+  // Bar Chart Component (CSS-based, no external library)
+  const BarChart = ({ data, title, color = '#3b82f6', valuePrefix = '₹' }: { data: {label:string;value:number}[]; title:string; color?:string; valuePrefix?:string }) => {
+    const maxVal = Math.max(...data.map(d => d.value), 1);
+    return (
+      <div style={{padding:'16px'}}>
+        <h4 style={{margin:'0 0 16px',fontSize:'14px',color:'var(--text-muted)',fontWeight:600,letterSpacing:'0.5px'}}>{title}</h4>
+        <div style={{display:'flex',alignItems:'flex-end',gap:'8px',height:'120px',borderBottom:'1px solid var(--border-color)',paddingBottom:'8px'}}>
+          {data.map((d, i) => (
+            <div key={i} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
+              <span style={{fontSize:'9px',color:'var(--text-muted)',fontWeight:600}}>{valuePrefix === '₹' && d.value > 0 ? `₹${d.value >= 1000 ? (d.value/1000).toFixed(1)+'k' : d.value}` : d.value}</span>
+              <div style={{width:'100%',background:color,borderRadius:'4px 4px 0 0',height:`${(d.value/maxVal)*100}px`,minHeight:d.value > 0 ? '4px' : '2px',opacity:0.85,transition:'height 0.3s ease'}} />
+              <span style={{fontSize:'9px',color:'var(--text-muted)',textAlign:'center',wordBreak:'break-word',lineHeight:'1.2'}}>{d.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // Handle Patient Registration
+  const handleLabWalkinRegistration = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!patientForm.name || patientForm.age <= 0) return alert('Please fill correct name and age');
+    try {
+      const payload = {
+        name: patientForm.name,
+        age: patientForm.age,
+        gender: patientForm.gender,
+        phone: patientForm.phone,
+        address: patientForm.address,
+        aadhaar: patientForm.aadhaar,
+        blood_group: patientForm.blood_group,
+        details: {
+          occupation: patientForm.occupation,
+          marital_status: patientForm.marital_status,
+          guardian_name: patientForm.guardian_name,
+          emergency_contact: patientForm.emergency_contact,
+          insurance_details: patientForm.insurance_details,
+          referral_doctor: patientForm.referral_doctor,
+          patient_category: patientForm.patient_category,
+          registration_type: patientForm.registration_type
+        }
+      };
+      const res = await axios.post(`${API_BASE}/patients/`, payload);
+      alert('Patient registered successfully!');
+      setPatientForm({
+        name: '', age: 0, gender: 'Male', phone: '', address: '', aadhaar: '', blood_group: 'A+', occupation: '', marital_status: 'Single', guardian_name: '', emergency_contact: '', insurance_details: '', referral_doctor: '', patient_category: 'General', registration_type: 'Walk-in'
+      });
+      loadAllData();
+      setIsLabRegistrationModalOpen(false);
+      setLabDirectOrderPatientId(res.data.id);
+      setIsLabOrderModalOpen(true);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to register patient');
+    }
+  };
+
+  const handleCreateDirectLabOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!labDirectOrderPatientId || !labDirectOrderForm.test_id) return alert('Please select a test');
+    try {
+      await axios.post(`${API_BASE}/lab-orders/`, {
+        patient_id: labDirectOrderPatientId,
+        doctor_name: labDirectOrderForm.referring_doctor,
+        test_id: Number(labDirectOrderForm.test_id)
+      });
+      alert('Lab ordered successfully!');
+      setIsLabOrderModalOpen(false);
+      setLabDirectOrderPatientId(null);
+      setLabDirectOrderForm({ test_id: '', referring_doctor: 'Walk-in / Self' });
+      loadAllData();
+    } catch (err) { console.error(err); alert('Failed to order lab'); }
+  };
+
+  const handleRegisterPatient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!patientForm.name || patientForm.age <= 0) return alert("Please fill correct name and age");
+    try {
+      const payload = {
+        name: patientForm.name,
+        age: patientForm.age,
+        gender: patientForm.gender,
+        phone: patientForm.phone,
+        address: patientForm.address,
+        aadhaar: patientForm.aadhaar,
+        blood_group: patientForm.blood_group,
+        details: {
+          occupation: patientForm.occupation,
+          marital_status: patientForm.marital_status,
+          guardian_name: patientForm.guardian_name,
+          emergency_contact: patientForm.emergency_contact,
+          insurance_details: patientForm.insurance_details,
+          referral_doctor: patientForm.referral_doctor,
+          patient_category: patientForm.patient_category,
+          registration_type: patientForm.registration_type
+        }
+      };
+      const pRes = await axios.post(`${API_BASE}/patients/`, payload);
+      // Auto-generate Token for newly registered patient
+      try {
+        await axios.post(`${API_BASE}/tokens/`, {
+          patient_id: pRes.data.id,
+          session: new Date().getHours() < 12 ? 'Morning' : 'Evening',
+          date: new Date().toISOString().split('T')[0],
+          fee: 500,
+          details: {}
+        });
+      } catch(tokenErr) {
+        console.error('Failed to auto-generate token', tokenErr);
+      }
+      alert("Patient registered and added to active queue successfully!");
+      setPatientForm({ name: '', age: 0, gender: 'Male', phone: '', address: '', aadhaar: '', blood_group: '', occupation: '', marital_status: 'Single', guardian_name: '', emergency_contact: '', insurance_details: '', referral_doctor: '', patient_category: 'General', registration_type: 'Walk-in' });
+      loadAllData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // =================== GLOBAL SEARCH ===================
+  const handleSearch = async (q: string) => {
+    setSearchQuery(q);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    if (!q.trim()) { setSearchResults([]); return; }
+    setSearchLoading(true);
+    searchTimeoutRef.current = setTimeout(async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/search/?q=${encodeURIComponent(q)}`);
+        setSearchResults(res.data);
+      } catch (e) {
+        setSearchResults([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 400);
+  };
+
+  // =================== OP BILLING ===================
+  const opOtherTotal = opOtherCharges.reduce((s, c) => s + c.amount, 0);
+  const opSubtotal = opBillForm.consultation_fee + opBillForm.lab_charges + opBillForm.pharmacy_charges + opOtherTotal;
+  const opDiscountAmt = (opBillForm.discount / 100) * opSubtotal;
+  const opGstAmt = (opBillForm.gst / 100) * (opSubtotal - opDiscountAmt);
+  const opTotal = opSubtotal - opDiscountAmt + opGstAmt;
+
+  const handleCreateOPBill = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!opBillForm.patient_id) return alert('Select a patient');
+    try {
+      const payload: any = {
+        patient_id: Number(opBillForm.patient_id),
+        token_id: opBillForm.token_id ? Number(opBillForm.token_id) : null,
+        doctor_name: opBillForm.doctor_name || null,
+        department: opBillForm.department || null,
+        consultation_fee: opBillForm.consultation_fee,
+        lab_charges: opBillForm.lab_charges,
+        pharmacy_charges: opBillForm.pharmacy_charges,
+        other_charges: opOtherCharges,
+        discount: opBillForm.discount,
+        gst: opBillForm.gst,
+        payment_mode: opBillForm.payment_mode,
+        payment_details: opBillForm.payment_mode === 'Split' ? opSplitPayment : null,
+        notes: opBillForm.notes || null,
+      };
+      const res = await axios.post(`${API_BASE}/billing/op/`, payload);
+      setViewBillDetail({...res.data, bill_type: 'op'});
+      alert('OP Bill created successfully!');
+      setOpBillForm({ patient_id: '', token_id: '', doctor_name: '', department: '', consultation_fee: 0, lab_charges: 0, pharmacy_charges: 0, discount: 0, gst: 5, payment_mode: 'Cash', notes: '' });
+      setOpOtherCharges([]);
+      loadAllData();
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Error creating OP bill');
+    }
+  };
+
+  // =================== IP BILLING ===================
+  const ipOtherTotal = ipOtherCharges.reduce((s, c) => s + c.amount, 0);
+  const ipRoomCharges = ipBillForm.room_charge_per_day * ipBillForm.days_stayed;
+  const ipSubtotal = ipRoomCharges + ipBillForm.doctor_charges + ipBillForm.nursing_charges + ipBillForm.pharmacy_charges + ipBillForm.lab_charges + ipOtherTotal;
+  const ipDiscountAmt = (ipBillForm.discount / 100) * ipSubtotal;
+  const ipGstAmt = (ipBillForm.gst / 100) * (ipSubtotal - ipDiscountAmt);
+  const ipTotal = ipSubtotal - ipDiscountAmt + ipGstAmt;
+
+  const handleCreateIPBill = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ipBillForm.patient_id) return alert('Select a patient');
+    try {
+      const payload: any = {
+        patient_id: Number(ipBillForm.patient_id),
+        admission_id: ipBillForm.admission_id ? Number(ipBillForm.admission_id) : null,
+        doctor_name: ipBillForm.doctor_name || null,
+        room_charge_per_day: ipBillForm.room_charge_per_day,
+        days_stayed: ipBillForm.days_stayed,
+        doctor_charges: ipBillForm.doctor_charges,
+        nursing_charges: ipBillForm.nursing_charges,
+        pharmacy_charges: ipBillForm.pharmacy_charges,
+        lab_charges: ipBillForm.lab_charges,
+        other_charges: ipOtherCharges,
+        discount: ipBillForm.discount,
+        gst: ipBillForm.gst,
+        payment_mode: ipBillForm.payment_mode,
+        payment_details: ipBillForm.payment_mode === 'Split' ? ipSplitPayment : null,
+        notes: ipBillForm.notes || null,
+      };
+      const res = await axios.post(`${API_BASE}/billing/ip/`, payload);
+      setViewBillDetail({...res.data, bill_type: 'ip'});
+      alert('IP Bill created successfully!');
+      setIpBillForm({ patient_id: '', admission_id: '', doctor_name: '', room_charge_per_day: 0, days_stayed: 1, doctor_charges: 0, nursing_charges: 0, pharmacy_charges: 0, lab_charges: 0, discount: 0, gst: 5, payment_mode: 'Cash', notes: '' });
+      setIpOtherCharges([]);
+      loadAllData();
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Error creating IP bill');
+    }
+  };
+
+  // =================== REPORTS ===================
+  const loadDailyReport = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/reports/daily/?report_date=${reportDate}`);
+      setDailyReport(res.data);
+    } catch (e) { console.error(e); }
+  };
+
+  const loadMonthlyReport = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/reports/monthly/?year=${reportYear}&month=${reportMonth}`);
+      setMonthlyReport(res.data);
+    } catch (e) { console.error(e); }
+  };
+
+  const loadYearlyReport = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/reports/yearly/?year=${reportYear}`);
+      setYearlyReport(res.data);
+    } catch (e) { console.error(e); }
+  };
+
+  const loadRevenueReport = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/reports/revenue/`);
+      setRevenueReport(res.data);
+    } catch (e) { console.error(e); }
+  };
+
+  const loadDoctorReport = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/reports/doctor-wise/`);
+      setDoctorReport(res.data);
+    } catch (e) { console.error(e); }
+  };
+
+  const loadMedicineSalesReport = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/reports/medicine-sales/`);
+      setMedicineSalesReport(res.data);
+    } catch (e) { console.error(e); }
+  };
+
+  const loadDepartmentWiseReport = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/reports/department-wise/`);
+      setDepartmentWiseReport(res.data);
+    } catch (e) { console.error(e); alert('Error loading department report'); }
+  };
+
+  const loadPatientReport = async () => {
+    if (!patientReportId) return alert('Enter Patient ID');
+    try {
+      const res = await axios.get(`${API_BASE}/reports/patient/${patientReportId}`);
+      setPatientReportData(res.data);
+    } catch (e) { console.error(e); alert('Patient not found or error loading report'); }
+  };
+
+  const loadMedicineStockReport = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/reports/medicine-stock/`);
+      setMedicineStockReport(res.data);
+    } catch (e) { console.error(e); alert('Error loading stock report'); }
+  };
+
+  const loadLabSummaryReport = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/reports/lab-summary/`);
+      setLabSummaryReport(res.data);
+    } catch (e) { console.error(e); alert('Error loading lab report'); }
+  };
+
+  const loadDischargeReport = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/reports/discharge/`);
+      setDischargeReport(res.data);
+    } catch (e) { console.error(e); alert('Error loading discharge report'); }
+  };
+
+
+  // PDF/Excel Export (inline using browser APIs since jspdf may not be installed yet)
+  const exportTableToCSV = (tableId: string, filename: string) => {
+    const table = document.getElementById(tableId);
+    if (!table) return;
+    const rows = Array.from(table.querySelectorAll('tr'));
+    const csvContent = rows.map(row => 
+      Array.from(row.querySelectorAll('th, td')).map(cell => `"${cell.textContent}"`).join(',')
+    ).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const printSection = (sectionId: string) => {
+    const content = document.getElementById(sectionId)?.innerHTML;
+    if (!content) return;
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write(`<html><head><title>Report</title><style>body{font-family:Arial;padding:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ccc;padding:8px;text-align:left}th{background:#f3f4f6}</style></head><body>${content}</body></html>`);
+    win.document.close();
+    win.print();
+  };
+
+  // GST Invoice Print
+  const printInvoice = (bill: any, billType: string) => {
+    const patient = patients.find(p => p.id === bill.patient_id);
+    const dateStr = new Date(bill.bill_date).toLocaleDateString('en-IN');
+    let rows = '';
+    if (billType === 'op') {
+      if (bill.consultation_fee) rows += `<tr><td>Consultation Fee</td><td>Dr. ${bill.doctor_name || ''}</td><td>₹${bill.consultation_fee.toFixed(2)}</td></tr>`;
+      if (bill.lab_charges) rows += `<tr><td>Lab Charges</td><td></td><td>₹${bill.lab_charges.toFixed(2)}</td></tr>`;
+      if (bill.pharmacy_charges) rows += `<tr><td>Pharmacy Charges</td><td></td><td>₹${bill.pharmacy_charges.toFixed(2)}</td></tr>`;
+      (bill.other_charges || []).forEach((c: any) => { rows += `<tr><td>${c.name}</td><td></td><td>₹${c.amount.toFixed(2)}</td></tr>`; });
+    } else if (billType === 'ip') {
+      if (bill.room_charges) rows += `<tr><td>Room Charges (${bill.days_stayed} days × ₹${bill.room_charge_per_day})</td><td></td><td>₹${bill.room_charges.toFixed(2)}</td></tr>`;
+      if (bill.doctor_charges) rows += `<tr><td>Doctor Charges</td><td>Dr. ${bill.doctor_name || ''}</td><td>₹${bill.doctor_charges.toFixed(2)}</td></tr>`;
+      if (bill.nursing_charges) rows += `<tr><td>Nursing Charges</td><td></td><td>₹${bill.nursing_charges.toFixed(2)}</td></tr>`;
+      if (bill.pharmacy_charges) rows += `<tr><td>Pharmacy Charges</td><td></td><td>₹${bill.pharmacy_charges.toFixed(2)}</td></tr>`;
+      if (bill.lab_charges) rows += `<tr><td>Lab Charges</td><td></td><td>₹${bill.lab_charges.toFixed(2)}</td></tr>`;
+      (bill.other_charges || []).forEach((c: any) => { rows += `<tr><td>${c.name}</td><td></td><td>₹${c.amount.toFixed(2)}</td></tr>`; });
+    } else {
+      (bill.items || []).forEach((item: any) => { rows += `<tr><td>${item.medicine_name}</td><td>${item.quantity} units × ₹${item.unit_price}</td><td>₹${item.total_price.toFixed(2)}</td></tr>`; });
+    }
+    const html = `<html><head><title>GST Invoice</title><style>
+      body{font-family:Arial,sans-serif;padding:30px;color:#000}
+      .header{text-align:center;margin-bottom:20px}
+      .header h1{color:#1e40af;font-size:22px;margin:0}
+      .header p{margin:4px 0;color:#555}
+      .invoice-meta{display:flex;justify-content:space-between;margin:20px 0;font-size:13px}
+      table{width:100%;border-collapse:collapse;margin:15px 0}
+      th{background:#1e40af;color:#fff;padding:8px;text-align:left}
+      td{padding:8px;border-bottom:1px solid #eee}
+      .totals{text-align:right;margin-top:10px}
+      .totals p{margin:4px 0}
+      .total-final{font-size:18px;font-weight:bold;color:#1e40af;margin-top:8px}
+      .footer{margin-top:30px;text-align:center;color:#888;font-size:12px}
+      @media print{body{padding:10px}}
+    </style></head><body>
+      <div class="header"><h1>🏥 MEDBILL PRO HOSPITAL</h1><p>123 Healthcare Street, Chennai - 600001 | GST: 33AAAAA0000A1Z5</p><p>Phone: +91 99999 99999 | Email: info@medbillpro.com</p></div>
+      <h2 style="text-align:center;color:#1e40af">${billType === 'op' ? 'OP' : billType === 'ip' ? 'IP' : 'Pharmacy'} GST Invoice</h2>
+      <div class="invoice-meta">
+        <div><b>Patient:</b> ${patient?.name || bill.patient_name || 'Walk-in'}<br><b>Age/Gender:</b> ${patient?.age || '-'}/${patient?.gender || '-'}<br><b>Phone:</b> ${patient?.phone || '-'}</div>
+        <div style="text-align:right"><b>Bill No:</b> #${bill.id}<br><b>Date:</b> ${dateStr}<br><b>Payment:</b> ${bill.payment_mode}</div>
+      </div>
+      <table><thead><tr><th>Description</th><th>Details</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="totals">
+        <p>Subtotal: ₹${bill.subtotal?.toFixed(2)}</p>
+        <p>Discount (${bill.discount}%): -₹${((bill.discount/100)*bill.subtotal).toFixed(2)}</p>
+        <p>GST (${bill.gst}%): +₹${((bill.gst/100)*(bill.subtotal-(bill.discount/100)*bill.subtotal)).toFixed(2)}</p>
+        <p class="total-final">Total: ₹${bill.total?.toFixed(2)}</p>
+      </div>
+      <div class="footer">Thank you for choosing MEDBILL PRO Hospital. Get well soon!<br>This is a computer-generated invoice.</div>
+    </body></html>`;
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write(html);
+    win.document.close();
+    win.print();
+  };
+
+  // Handle IP Admission
+  const handleAdmitPatient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ipAdmissionForm.patient_id) return alert("Please select a patient");
+    try {
+      await axios.post(`${API_BASE}/ip-admissions/`, {
+        ...ipAdmissionForm,
+        patient_id: Number(ipAdmissionForm.patient_id)
+      });
+      alert("Patient admitted successfully!");
+      setIpAdmissionForm({ patient_id: '', ward_number: 'General Ward', room_number: '', doctor_in_charge: '', reason_for_admission: '' });
+      setSelectedWardTab('GW');
+      loadAllData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // New Lab Actions
+  const handleSaveLabTestMaster = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      if (selectedTestMasterId) {
+        await axios.put(`${API_BASE}/lab-test-masters/${selectedTestMasterId}`, labTestMasterForm);
+        alert("Lab Test Master updated!");
+      } else {
+        await axios.post(`${API_BASE}/lab-test-masters/`, labTestMasterForm);
+        alert("Lab Test Master saved!");
+      }
+      setLabTestMasterForm({ test_code: '', test_name: '', category: 'Pathology', department: '', sample_type: 'Blood', unit: '', reference_range: '', normal_range_male: '', normal_range_female: '', normal_range_child: '', price: 0, tat_hours: 24, is_active: true });
+      setSelectedTestMasterId(null);
+      loadAllData();
+    } catch (err: any) { 
+      console.error(err); 
+      alert(err.response?.data?.detail || "Failed to save Test Master"); 
+    }
+  };
+
+  const handleEditLabTestMaster = (test: LabTestMaster) => {
+    setSelectedTestMasterId(test.id);
+    setLabTestMasterForm({
+      test_code: test.test_code, test_name: test.test_name, category: test.category || '', department: test.department || '', sample_type: test.sample_type || '', unit: test.unit || '', reference_range: test.reference_range || '', normal_range_male: test.normal_range_male || '', normal_range_female: test.normal_range_female || '', normal_range_child: test.normal_range_child || '', price: test.price, tat_hours: test.tat_hours, is_active: test.is_active
+    });
+  };
+
+  const handleDeleteLabTestMaster = async (id: number) => {
+    if (!window.confirm("Are you sure you want to delete this test?")) return;
+    try {
+      await axios.delete(`${API_BASE}/lab-test-masters/${id}`);
+      alert("Lab Test deleted successfully!");
+      loadAllData();
+    } catch (err) { console.error(err); alert("Failed to delete Test Master"); }
+  };
+
+  const handleCreateLabOrder = async (testId: number) => {
+    if (!selectedOPToken || !selectedOPToken.patient) return alert("Select patient casesheet first");
+    try {
+      await axios.post(`${API_BASE}/lab-orders/`, {
+        patient_id: selectedOPToken.patient.id,
+        doctor_name: currentUser?.username,
+        test_id: testId
+      });
+      alert("Lab ordered successfully!");
+      loadAllData();
+    } catch (err) { console.error(err); alert("Failed to order lab"); }
+  };
+
+  const handleUpdateLabSampleStatus = async (sampleId: number, status: string) => {
+    try {
+      await axios.put(`${API_BASE}/lab-samples/${sampleId}/status?status=${status}`);
+      loadAllData();
+    } catch (err) { console.error(err); alert("Failed to update sample status"); }
+  };
+
+  const handleUpdateLabOrderStatus = async (orderId: number, status: string) => {
+    try {
+      await axios.put(`${API_BASE}/lab-orders/${orderId}`, { status });
+      loadAllData();
+    } catch (err) { console.error(err); alert("Failed to update order status"); }
+  };
+
+  const handleSaveEditOrder = async () => {
+    if (!selectedEditOrder) return;
+    try {
+      await axios.put(`${API_BASE}/lab-orders/${selectedEditOrder.id}`, {
+        priority: editOrderForm.priority,
+        remarks: editOrderForm.remarks
+      });
+      alert("Order updated successfully!");
+      setSelectedEditOrder(null);
+      loadAllData();
+    } catch (err) { console.error(err); alert("Failed to update order"); }
+  };
+
+  const handleSaveCollectSample = async () => {
+    if (!selectedCollectSampleOrder) return;
+    try {
+      await axios.post(`${API_BASE}/lab-samples/`, {
+        order_id: selectedCollectSampleOrder.id,
+        sample_type: collectSampleForm.sample_type,
+        collected_by: collectSampleForm.collected_by,
+        container_type: collectSampleForm.container_type,
+        barcode: collectSampleForm.barcode,
+        remarks: collectSampleForm.remarks,
+        status: 'Collected'
+      });
+      
+      await axios.put(`${API_BASE}/lab-orders/${selectedCollectSampleOrder.id}`, {
+        status: 'Sample Collected'
+      });
+      
+      alert("Sample collected successfully!");
+      setSelectedCollectSampleOrder(null);
+      loadAllData();
+    } catch (err) { console.error(err); alert("Failed to collect sample"); }
+  };
+
+  const handleSaveResultEntry = async (isFinal: boolean) => {
+    if (!selectedResultEntryOrder) return;
+    if (!selectedResultEntryOrder.patient_id) return alert('Cannot submit results without a selected patient.');
+    if (isFinal && selectedResultEntryOrder.status === 'Verified') return alert('This order has already been verified. Duplicate reports are not allowed.');
+    try {
+      if (isFinal) {
+        // Create Lab Report
+        await axios.post(`${API_BASE}/lab-reports/`, {
+          patient_id: selectedResultEntryOrder.patient_id,
+          test_name: labTestMasters.find(t=>t.id===selectedResultEntryOrder.test_id)?.test_name || 'Unknown',
+          reported_by: currentUser?.username,
+          results_data: resultEntryForm
+        });
+        
+        // Update Order status
+        await axios.put(`${API_BASE}/lab-orders/${selectedResultEntryOrder.id}`, {
+          status: 'Verified',
+          remarks: 'Result Verified' // clear draft
+        });
+        alert("Result Verified and Completed!");
+      } else {
+        // Save Draft in remarks
+        await axios.put(`${API_BASE}/lab-orders/${selectedResultEntryOrder.id}`, {
+          status: 'Testing',
+          remarks: JSON.stringify(resultEntryForm)
+        });
+        alert("Result Draft Saved!");
+      }
+      
+      setSelectedResultEntryOrder(null);
+      loadAllData();
+    } catch (err) { console.error(err); alert("Failed to save result"); }
+  };
+
+  const handleSaveNewLabReport = async (order: LabOrder) => {
+    try {
+      await axios.post(`${API_BASE}/lab-reports/`, {
+        patient_id: order.patient_id,
+        test_name: order.test?.test_name,
+        reported_by: currentUser?.username,
+        results_data: labResultParams,
+        remarks: "Completed"
+      });
+      await handleUpdateLabOrderStatus(order.id, "Verified");
+      alert("Results verified and report generated!");
+      setLabResultParams({});
+      loadAllData();
+    } catch (err) { console.error(err); alert("Failed to save results"); }
+  };
+
+  // Handle Lab Report (Legacy)
+  const handleSaveLabReport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!labReportForm.patient_id || !labReportForm.test_name || !labReportForm.result_value) return alert("Please fill required fields");
+    try {
+      await axios.post(`${API_BASE}/lab-reports/`, {
+        ...labReportForm,
+        patient_id: Number(labReportForm.patient_id)
+      });
+      alert("Lab report saved successfully!");
+      setLabReportForm({ patient_id: '', test_name: '', result_value: '', normal_range: '', units: '', reported_by: '', remarks: '' });
+      loadAllData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Generate OP Token
+  const handleGenerateToken = async () => {
+    if (!selectedPatientId) return alert("Please select a patient");
+    try {
+      await axios.post(`${API_BASE}/tokens/`, {
+        patient_id: Number(selectedPatientId),
+        session: opSession,
+        date: new Date().toISOString().split('T')[0],
+        fee: opFee,
+        details: tokenForm
+      });
+      alert("Token generated successfully!");
+      loadAllData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Prescriptions handling
+  const addMedicineToPrescription = () => {
+    if (!newMed.medicine_id) return alert("Select a medicine");
+    const stockItem = inventory.find(i => i.id === newMed.medicine_id);
+    if (stockItem) {
+      if (casesheetMeds.some(m => m.medicine_id === newMed.medicine_id)) {
+        return alert("Medicine already added to prescription!");
+      }
+      setCasesheetMeds([...casesheetMeds, { ...newMed, name: stockItem.name }]);
+      setNewMed({ medicine_id: 0, quantity: 1, duration: '', instructions: '', timing_morning: false, timing_afternoon: false, timing_night: false, timing_relation: 'After Food' });
+    }
+  };
+  
+  // Auto-calculate quantity effect
+  useEffect(() => {
+    const timesPerDay = (newMed.timing_morning ? 1 : 0) + (newMed.timing_afternoon ? 1 : 0) + (newMed.timing_night ? 1 : 0);
+    const dur = parseInt(newMed.duration) || 0;
+    if (timesPerDay > 0 && dur > 0) {
+      setNewMed(prev => ({ ...prev, quantity: timesPerDay * dur }));
+    }
+  }, [newMed.timing_morning, newMed.timing_afternoon, newMed.timing_night, newMed.duration]);
+
+  const removeMedicineFromPrescription = (index: number) => {
+    setCasesheetMeds(casesheetMeds.filter((_, i) => i !== index));
+  };
+
+  const toggleLab = (labName: string) => {
+    if (casesheetLabs.includes(labName)) setCasesheetLabs(casesheetLabs.filter(l => l !== labName));
+    else setCasesheetLabs([...casesheetLabs, labName]);
+  };
+
+  // Save Casesheet
+
+  const handleSaveCasesheet = async (isFinal: boolean) => {
+    if (!selectedOPToken && isFinal) return alert("Please select an active consultation");
+    
+    // If Draft, just save locally in state (could persist to localStorage)
+    if (!isFinal) {
+      alert("Draft saved locally for this session.");
+      return;
+    }
+
+    const combinedSymptoms = `Chief Complaint: ${casesheetForm.chiefComplaint}
+HPI: ${casesheetForm.hpi}
+PMH: ${casesheetForm.pmh}
+Family History: ${casesheetForm.familyHistory}
+Allergies: ${casesheetForm.allergies}
+Clinical Findings: ${casesheetForm.clinicalFindings}`.trim();
+
+    const combinedDiagnosis = `Diagnosis: ${casesheetForm.diagnosis}
+ICD Code: ${casesheetForm.icdCode}
+Treatment Plan: ${casesheetForm.treatmentPlan}
+Advice: ${casesheetForm.advice}
+Follow-up: ${casesheetForm.followUpDate}`.trim();
+
+    try {
+      const res = await fetch(`${API_BASE}/casesheets/`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          patient_id: selectedOPToken.patient_id,
+          token_id: selectedOPToken.id,
+          symptoms: combinedSymptoms,
+          diagnosis: combinedDiagnosis,
+          vitals_bp: casesheetForm.vitalsBp,
+          vitals_pulse: casesheetForm.vitalsPulse,
+          vitals_temp: casesheetForm.vitalsTemp,
+          vitals_resp: casesheetForm.vitalsResp,
+          prescribed_medicines: casesheetMeds.map(m => ({
+            name: m.name, quantity: m.quantity, duration: m.duration,
+            instructions: m.instructions,
+            timing_morning: m.timing_morning, timing_afternoon: m.timing_afternoon, timing_night: m.timing_night,
+            timing_relation: m.timing_relation
+          })),
+          prescribed_labs: casesheetLabs
+        })
+      });
+      if (res.ok) {
+        alert('Prescription Finalized successfully!');
+        setSelectedOPToken(null);
+        setCasesheetForm({ vitalsBp: '', vitalsPulse: '', vitalsTemp: '', vitalsResp: '', chiefComplaint: '', hpi: '', pmh: '', familyHistory: '', allergies: '', clinicalFindings: '', diagnosis: '', icdCode: '', treatmentPlan: '', advice: '', followUpDate: '' });
+        setCasesheetMeds([]);
+        setCasesheetLabs([]);
+        loadAllData();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleOrderDoctorLabs = async () => {
+    if (!selectedDoctorPatientId) return alert("Please select a patient first.");
+    if (casesheetLabs.length === 0) return alert("Please select at least one lab test to order.");
+    
+    try {
+      for (const testName of casesheetLabs) {
+        const test = labTestMasters.find(t => t.test_name === testName);
+        if (test) {
+          await axios.post(`${API_BASE}/lab-orders/`, {
+            patient_id: selectedDoctorPatientId,
+            doctor_name: currentUser?.username || 'Doctor',
+            test_id: test.id,
+            status: 'Pending',
+            priority: 'Routine'
+          });
+        }
+      }
+      alert(`Successfully ordered ${casesheetLabs.length} lab tests.`);
+      setCasesheetLabs([]);
+      loadAllData();
+    } catch (err) {
+      console.error(err);
+      alert("Failed to order labs.");
+    }
+  };
+
+  const handleCreateDirectConsultation = async (type: string) => {
+    if (!selectedDoctorPatientId) return alert("Please select a patient.");
+    try {
+      const res = await axios.post(`${API_BASE}/tokens/`, {
+        patient_id: selectedDoctorPatientId,
+        department: "General Medicine",
+        doctor_name: currentUser?.username || 'Doctor',
+        session: type, // "New Visit", "Follow-up", "Emergency"
+        token_number: Math.floor(Math.random() * 1000)
+      });
+      alert(`${type} Consultation Created!`);
+      loadAllData();
+      setSelectedOPToken(res.data);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to create consultation.");
+    }
+  };
+  const handleLoadPrescription = async (patId: number) => {
+    try {
+      const res = await axios.get(`${API_BASE}/patients/${patId}/casesheets/`);
+      const casesheets = res.data;
+      if (!casesheets || casesheets.length === 0) return alert("No casesheets found for this patient.");
+      
+      const latest = casesheets[0];
+      if (!latest.prescribed_medicines || latest.prescribed_medicines.length === 0) {
+        return alert("No medicines prescribed in the latest casesheet.");
+      }
+
+      let newCart = [...billingCart];
+      let loadedCount = 0;
+      let missingList = [];
+
+      latest.prescribed_medicines.forEach((pm: any) => {
+        // Try to match by generic name or brand name (or just medicine name if we had normalized it, but we can search inventory name)
+        // Here we just search by name case-insensitive
+        const medName = pm.name || pm.medicine_name || '';
+        const stockItem = inventory.find(i => i.name.toLowerCase() === medName.toLowerCase());
+        if (stockItem) {
+          if (stockItem.quantity >= pm.quantity) {
+            newCart.push({
+              medicine_id: stockItem.id,
+              name: stockItem.name,
+              quantity: pm.quantity,
+              unit_price: stockItem.unit_price
+            });
+            loadedCount++;
+          } else {
+             missingList.push(`${medName} (Insufficient Stock)`);
+          }
+        } else {
+           missingList.push(`${medName} (Not found in inventory)`);
+        }
+      });
+      setBillingCart(newCart);
+      alert(`Loaded ${loadedCount} medicines. ${missingList.length > 0 ? "Skipped: " + missingList.join(", ") : ""}`);
+
+    } catch (e) {
+      console.error(e);
+      alert("Failed to load prescription.");
+    }
+  };
+
+  const handleBarcodeScan = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const code = barcodeInput.trim();
+      if(!code) return;
+      const stockItem = inventory.find(i => i.details?.barcode === code || String(i.id) === code || i.batch_no === code);
+      if (stockItem) {
+        setBillingNewItem({ medicine_id: stockItem.id, quantity: 1 });
+        // Automatically add it to cart
+        addToCart({ medicine_id: stockItem.id, quantity: 1 } as any, stockItem);
+      } else {
+        alert("Barcode/Item not found in inventory!");
+      }
+      setBarcodeInput('');
+    }
+  };
+
+  const addToCart = (overrideItem?: any, stockRef?: any) => {
+    const isEvent = overrideItem && overrideItem.nativeEvent;
+    const itemToAdd = (!overrideItem || isEvent) ? billingNewItem : overrideItem;
+    
+    if (!itemToAdd.medicine_id || itemToAdd.quantity <= 0) return alert("Select medicine and quantity");
+    const stockItem = stockRef || inventory.find(i => i.id === itemToAdd.medicine_id);
+    if (!stockItem) return;
+    if (stockItem.quantity < itemToAdd.quantity) {
+      return alert(`Insufficient stock! Only ${stockItem.quantity} units left.`);
+    }
+
+    // Check if item already in cart
+    const existing = billingCart.find(i => i.medicine_id === itemToAdd.medicine_id);
+    if (existing) {
+      if (stockItem.quantity < (existing.quantity + itemToAdd.quantity)) {
+        return alert(`Cannot add. Exceeds available stock (${stockItem.quantity} units).`);
+      }
+      setBillingCart(billingCart.map(c => c.medicine_id === itemToAdd.medicine_id ? { ...c, quantity: c.quantity + itemToAdd.quantity } : c));
+    } else {
+      setBillingCart([...billingCart, {
+        medicine_id: stockItem.id,
+        name: stockItem.name,
+        quantity: itemToAdd.quantity,
+        unit_price: stockItem.unit_price
+      }]);
+    }
+    if (!overrideItem || isEvent) setBillingNewItem({ medicine_id: 0, quantity: 1 });
+  };
+
+  const removeFromCart = (id: number) => {
+    setBillingCart(billingCart.filter(item => item.medicine_id !== id));
+  };
+
+  // Submit Pharmacy Bill (Deducts stock automatically on backend)
+  const handleCheckoutBill = async () => {
+    if (billingCart.length === 0) return alert("Cart is empty");
+    const payload = {
+      patient_id: billingPatientType === 'registered' ? Number(billingPatientId) : null,
+      patient_name: billingPatientType === 'walkin' ? billingWalkInName : null,
+      discount: billingDiscount,
+      gst: billingGst,
+      items: billingCart.map(c => ({ medicine_id: c.medicine_id, quantity: c.quantity }))
+    };
+
+    try {
+      const response = await axios.post(`${API_BASE}/billing/pharmacy/`, payload);
+      alert("Pharmacy invoice generated and stock deducted successfully!");
+      setBillingCart([]);
+      setViewInvoice(response.data);
+      setActiveTab('reports');
+      loadAllData();
+    } catch (err: any) {
+      alert(err.response?.data?.detail || "Checkout failed");
+    }
+  };
+
+  // Inventory Save
+  const handleSaveInventoryItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inventoryForm.name) return;
+    try {
+      await axios.post(`${API_BASE}/inventory/`, inventoryForm);
+      alert("Inventory item added!");
+      setInventoryForm({
+        name: '', category: 'Pharmacy', batch_no: '', expiry_date: '', quantity: 0, unit_price: 0, min_stock_level: 10,
+        details: {
+          medicineCode: '', genericName: '', brandName: '', manufacturer: '', hsnCode: '', gstPercent: 12,
+          mrp: 0, purchasePrice: 0, rackNumber: '', storageLocation: '', maxStock: 100, barcode: '',
+          medicineImage: '', description: '', dosageForm: '', strength: '', scheduleType: ''
+        }
+      });
+      loadAllData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Process GRN (Stock In)
+  const handleSaveGRN = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!grnForm.medicine_id) return alert("Please select a medicine.");
+    try {
+      await axios.post(`${API_BASE}/inventory/adjust/`, {
+        medicine_id: Number(grnForm.medicine_id),
+        type: grnForm.type,
+        quantity: grnForm.quantity,
+        notes: grnForm.notes,
+        details: grnForm.details
+      });
+      alert("Stock successfully updated (GRN processed)!");
+      setGrnForm({
+        medicine_id: '', quantity: 1, type: 'Stock In', notes: '',
+        details: { supplierName: '', invoiceNumber: '', purchaseOrder: '' }
+      });
+      loadAllData();
+    } catch (err) {
+      console.error(err);
+      alert("Failed to process GRN.");
+    }
+  };
+
+  // Calculation helpers
+  const cartSubtotal = billingCart.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0);
+  const cartDiscountAmt = (billingDiscount / 100) * cartSubtotal;
+  const cartGstAmt = (billingGst / 100) * (cartSubtotal - cartDiscountAmt);
+  const cartTotal = cartSubtotal - cartDiscountAmt + cartGstAmt;
+
+  const loadUsers = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/users/?t=${new Date().getTime()}`);
+      setUsers(res.data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const formData = new URLSearchParams();
+      formData.append('username', loginForm.username);
+      formData.append('password', loginForm.password);
+      
+      const res = await axios.post(`${API_BASE}/login`, formData, {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      });
+      const data = res.data;
+      setToken(data.access_token);
+      localStorage.setItem('token', data.access_token);
+      if (data.refresh_token) {
+        localStorage.setItem('refresh_token', data.refresh_token);
+      }
+      axios.defaults.headers.common['Authorization'] = `Bearer ${data.access_token}`;
+    } catch (err: any) {
+      if (err.response && err.response.status === 429) {
+        alert("Too many failed attempts. Account is temporarily locked.");
+      } else {
+        alert("Invalid credentials or account locked.");
+      }
+    }
+  };
+
+  const handleForgotPassword = () => {
+    alert("Please contact the Administrator to reset your password.");
+  };
+
+  if (!token || !currentUser) {
+    return (
+      <div className="login-container">
+        <div className="login-card">
+          <div className="login-header">
+            <Activity size={48} className="login-logo" />
+            <h2>MEDBILL PRO</h2>
+            <p>Sign in to your account</p>
+          </div>
+          <form className="login-form" onSubmit={handleLogin}>
+            <div className="form-group">
+              <label>Username</label>
+              <input 
+                type="text" 
+                className="input-field"
+                value={loginForm.username}
+                onChange={e => setLoginForm({...loginForm, username: e.target.value})}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Password</label>
+              <input 
+                type="password" 
+                className="input-field"
+                value={loginForm.password}
+                onChange={e => setLoginForm({...loginForm, password: e.target.value})}
+                required
+              />
+            </div>
+            <div className="login-actions">
+              <button type="submit" className="btn btn-primary login-btn">Sign In</button>
+              <a href="#" className="forgot-password" onClick={handleForgotPassword}>Forgot Password?</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-container">
+      {/* Sidebar Navigation */}
+      <div className="sidebar no-print">
+        <div className="logo-container">
+          <Activity size={28} className="logo-text" style={{ color: '#3b82f6' }} />
+          <span className="logo-text">MEDBILL PRO</span>
+        </div>
+        <nav className="nav-links">
+          {(currentUser.role === 'Admin' || currentUser.role === 'Doctor') && (
+            <>
+              {currentUser.role === 'Admin' && <div className="nav-section-title" style={{fontSize:'10px', color:'#94a3b8', padding:'10px 20px', letterSpacing:'1px', marginTop:'10px'}}>ADMIN MODULES</div>}
+              <div className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}><Activity size={20} /> Dashboard</div>
+              {currentUser.role === 'Admin' && <div className={`nav-item ${activeTab === 'users' ? 'active' : ''}`} onClick={() => { setActiveTab('users'); loadUsers(); }}><Users size={20} /> User Management</div>}
+              <div className={`nav-item ${activeTab === 'search' ? 'active' : ''}`} onClick={() => setActiveTab('search')}><Search size={20} /> Global Search</div>
+              
+              <div className="nav-section-title" style={{fontSize:'10px', color:'#94a3b8', padding:'10px 20px', letterSpacing:'1px', marginTop:'10px'}}>HOSPITAL MODULES</div>
+              <div className={`nav-item ${activeTab === 'patients' ? 'active' : ''}`} onClick={() => setActiveTab('patients')}><Users size={20} /> Registration & Tokens</div>
+              <div className={`nav-item ${activeTab === 'casesheet' ? 'active' : ''}`} onClick={() => setActiveTab('casesheet')}><Clipboard size={20} /> OP Casesheet</div>
+              <div className={`nav-item ${activeTab === 'casesheet' ? 'active' : ''}`} onClick={() => setActiveTab('casesheet')}><FileText size={20} /> Write Prescription</div>
+              <div className={`nav-item ${activeTab === 'ip_admissions' ? 'active' : ''}`} onClick={() => setActiveTab('ip_admissions')}><Clipboard size={20} /> IP Admissions</div>
+              
+              <div className="nav-section-title" style={{fontSize:'10px', color:'#94a3b8', padding:'10px 20px', letterSpacing:'1px', marginTop:'10px'}}>BILLING</div>
+              <div className={`nav-item ${activeTab === 'billing' ? 'active' : ''}`} onClick={() => { setActiveTab('billing'); setBillingTab('op'); }}><Receipt size={20} /> Billing Module</div>
+              <div className={`nav-item ${activeTab === 'pharmacy' ? 'active' : ''}`} onClick={() => setActiveTab('pharmacy')}><ShoppingBag size={20} /> Pharmacy</div>
+              
+              <div className="nav-section-title" style={{fontSize:'10px', color:'#94a3b8', padding:'10px 20px', letterSpacing:'1px', marginTop:'10px'}}>OTHER</div>
+              <div className={`nav-item ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}><Database size={20} /> Inventory</div>
+              <div className={`nav-item ${activeTab === 'lab_reports' ? 'active' : ''}`} onClick={() => setActiveTab('lab_reports')}><FlaskConical size={20} /> Lab Reports</div>
+              <div className={`nav-item ${activeTab === 'reports' ? 'active' : ''}`} onClick={() => { setActiveTab('reports'); loadDailyReport(); loadRevenueReport(); }}><BarChart2 size={20} /> Reports</div>
+              {currentUser.role === 'Admin' && <div className={`nav-item ${activeTab === 'admin_settings' ? 'active' : ''}`} onClick={() => { setActiveTab('admin_settings'); loadHospitalSettings(); loadAuditLogs(); }}><Settings size={20} /> Admin Settings</div>}
+            </>
+          )}
+
+          {currentUser.role === 'Receptionist' && (
+              <>
+                <div className="sidebar-section">Reception & Registration</div>
+                <div className={`nav-item ${activeTab === 'reception_dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('reception_dashboard')}><Activity size={20} /> Dashboard</div>
+                <div className={`nav-item ${activeTab === 'patients' ? 'active' : ''}`} onClick={() => setActiveTab('patients')}><Users size={20} /> Registration</div>
+                <div className={`nav-item ${activeTab === 'op_token' ? 'active' : ''}`} onClick={() => setActiveTab('op_token')}><Clipboard size={20} /> Token & Check-in</div>
+                <div className={`nav-item ${activeTab === 'appointments' ? 'active' : ''}`} onClick={() => setActiveTab('appointments')}><Calendar size={20} /> Appointments</div>
+                <div className={`nav-item ${activeTab === 'live_queue' ? 'active' : ''}`} onClick={() => setActiveTab('live_queue')}><List size={20} /> Live Queue</div>
+                <div className={`nav-item ${activeTab === 'patient_history' ? 'active' : ''}`} onClick={() => setActiveTab('patient_history')}><Search size={20} /> Patient Database</div>
+                <div className={`nav-item ${activeTab === 'reports' ? 'active' : ''}`} onClick={() => setActiveTab('reports')}><BarChart2 size={20} /> Reports</div>
+              </>
+            )}
+
+          {currentUser.role === 'Pharmacy' && (
+            <>
+              <div className={`nav-item ${activeTab === 'pharmacy' ? 'active' : ''}`} onClick={() => setActiveTab('pharmacy')}><ShoppingBag size={20} /> Medicine Billing</div>
+              <div className={`nav-item ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}><Database size={20} /> Medicine Stock</div>
+              <div className={`nav-item ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}><ShoppingBag size={20} /> Purchase</div>
+              <div className={`nav-item ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}><AlertTriangle size={20} /> Expiry Management</div>
+              <div className={`nav-item ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}><Database size={20} /> Inventory</div>
+              <div className={`nav-item ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => setActiveTab('inventory')}><FileText size={20} /> Medicine Search</div>
+              <div className={`nav-item ${activeTab === 'reports' ? 'active' : ''}`} onClick={() => setActiveTab('reports')}><Activity size={20} /> Reports</div>
+            </>
+          )}
+
+          {currentUser.role === 'Laboratory' && (
+            <div className="sidebar-group">
+              <div className="group-title">Laboratory</div>
+              <div className={`nav-item ${activeTab === 'lab_dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('lab_dashboard')}><Activity size={20} /> Dashboard</div>
+              <div className={`nav-item ${activeTab === 'lab_master' ? 'active' : ''}`} onClick={() => setActiveTab('lab_master')}><Database size={20} /> Test Master</div>
+              <div className={`nav-item ${activeTab === 'lab_orders' ? 'active' : ''}`} onClick={() => setActiveTab('lab_orders')}><FileText size={20} /> Lab Orders</div>
+              <div className={`nav-item ${activeTab === 'lab_samples' ? 'active' : ''}`} onClick={() => setActiveTab('lab_samples')}><FlaskConical size={20} /> Sample Collection</div>
+              <div className={`nav-item ${activeTab === 'lab_results' ? 'active' : ''}`} onClick={() => setActiveTab('lab_results')}><Clipboard size={20} /> Result Entry</div>
+              <div className={`nav-item ${activeTab === 'lab_reports_new' ? 'active' : ''}`} onClick={() => setActiveTab('lab_reports_new')}><CheckCircle size={20} /> Reports</div>
+            </div>
+          )}
+        </nav>
+        
+        <div className="sidebar-footer">
+          <div className="user-profile">
+            <div className="user-avatar">{currentUser.username.charAt(0).toUpperCase()}</div>
+            <div className="user-info">
+              <span className="user-name">{currentUser.username}</span>
+              <span className="user-role">{currentUser.role}</span>
+            </div>
+          </div>
+          <button className="logout-btn" onClick={handleLogout}>
+            Logout
+          </button>
+        </div>
+      </div>
+
+      {/* Main Content Pane */}
+      <div className="main-content">
+        {/* Top Navbar */}
+        <div className="top-navbar no-print" style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 24px', background:'var(--bg-card)', borderBottom:'1px solid var(--border)', marginBottom:'24px', position:'sticky', top:0, zIndex:90}}>
+          <div style={{fontWeight:600, fontSize:'16px'}}>Welcome back, {currentUser.username}!</div>
+          <div style={{display:'flex', gap:'12px', alignItems:'center'}}>
+            <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="btn btn-primary" style={{padding:'8px', borderRadius:'50%', background:'transparent', border:'1px solid var(--border)', color:'var(--text-primary)'}} title="Toggle Theme">
+              {theme === 'dark' ? <Sun size={18}/> : <Moon size={18}/>}
+            </button>
+            <div style={{background:'rgba(59,130,246,0.1)', color:'#3b82f6', padding:'6px 12px', borderRadius:'20px', fontSize:'13px', fontWeight:600}}>
+              {new Date().toLocaleDateString()}
+            </div>
+          </div>
+        </div>
+
+
+        {activeTab === 'dashboard' && (
+          <div>
+            <div className="header no-print">
+              <div className="header-title">
+                <h1>Hospital Dashboard</h1>
+                <p>Live overview — {new Date().toLocaleDateString('en-IN', {weekday:'long', year:'numeric', month:'long', day:'numeric'})}</p>
+              </div>
+              <button className="btn btn-primary" style={{display:'flex',alignItems:'center',gap:'6px'}} onClick={loadDashboardData}>
+                <RefreshCw size={16} /> Refresh
+              </button>
+            </div>
+
+
+            {currentUser?.role === 'Admin' ? (
+              <>
+                {/* 6 Stats Cards */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'16px',marginBottom:'20px'}}>
+              <div className="glass-card stat-card" style={{borderLeft:'4px solid #3b82f6'}}>
+                <div className="stat-icon" style={{backgroundColor:'rgba(59,130,246,0.15)',color:'#3b82f6'}}><Users size={24}/></div>
+                <div>
+                  <label>Today's Patients</label>
+                  <div className="stat-val">{dashStats?.today_patients ?? patients.filter(p => new Date(p.created_at).toDateString() === new Date().toDateString()).length}</div>
+                  <small style={{color:'var(--text-muted)'}}>Total: {dashStats?.total_patients ?? patients.length}</small>
+                </div>
+              </div>
+              <div className="glass-card stat-card" style={{borderLeft:'4px solid #10b981'}}>
+                <div className="stat-icon" style={{backgroundColor:'rgba(16,185,129,0.15)',color:'#10b981'}}><DollarSign size={24}/></div>
+                <div>
+                  <label>Today's Revenue</label>
+                  <div className="stat-val">₹{dashStats ? dashStats.today_revenue.toFixed(2) : '0.00'}</div>
+                  <small style={{color:'var(--text-muted)'}}>All bills combined</small>
+                </div>
+              </div>
+              <div className="glass-card stat-card" style={{borderLeft:'4px solid #8b5cf6'}}>
+                <div className="stat-icon" style={{backgroundColor:'rgba(139,92,246,0.15)',color:'#8b5cf6'}}><Clipboard size={24}/></div>
+                <div>
+                  <label>OP Count (Today)</label>
+                  <div className="stat-val">{dashStats?.op_count ?? tokens.filter(t => t.date === new Date().toISOString().split('T')[0]).length}</div>
+                  <small style={{color:'var(--text-muted)'}}>Outpatient tokens</small>
+                </div>
+              </div>
+              <div className="glass-card stat-card" style={{borderLeft:'4px solid #f59e0b'}}>
+                <div className="stat-icon" style={{backgroundColor:'rgba(245,158,11,0.15)',color:'#f59e0b'}}><Bed size={24}/></div>
+                <div>
+                  <label>IP Count (Active)</label>
+                  <div className="stat-val">{dashStats?.ip_count ?? ipAdmissions.filter(a => a.status === 'Admitted').length}</div>
+                  <small style={{color:'var(--text-muted)'}}>Inpatients admitted</small>
+                </div>
+              </div>
+              <div className="glass-card stat-card" style={{borderLeft:'4px solid #06b6d4'}}>
+                <div className="stat-icon" style={{backgroundColor:'rgba(6,182,212,0.15)',color:'#06b6d4'}}><FlaskConical size={24}/></div>
+                <div>
+                  <label>Lab Count (Today)</label>
+                  <div className="stat-val">{dashStats?.lab_count ?? labReports.filter(r => new Date(r.date_conducted).toDateString() === new Date().toDateString()).length}</div>
+                  <small style={{color:'var(--text-muted)'}}>Lab tests done</small>
+                </div>
+              </div>
+              <div className="glass-card stat-card" style={{borderLeft:'4px solid #f43f5e'}}>
+                <div className="stat-icon" style={{backgroundColor:'rgba(244,63,94,0.15)',color:'#f43f5e'}}><ShoppingBag size={24}/></div>
+                <div>
+                  <label>Medicine Sales (Today)</label>
+                  <div className="stat-val">₹{dashStats ? dashStats.medicine_sales.toFixed(2) : '0.00'}</div>
+                  <small style={{color:'#f59e0b',fontWeight:600}}>⚠ Low Stock: {dashStats?.low_stock_count ?? inventory.filter(i=>i.quantity<=i.min_stock_level).length} items</small>
+                </div>
+              </div>
+            </div>
+
+            {/* 4 Charts */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'16px',marginBottom:'20px'}}>
+              <div className="glass-card">
+                {dashCharts?.daily_revenue ? <BarChart data={dashCharts.daily_revenue} title="DAILY REVENUE (Last 7 Days)" color="#3b82f6" /> : <div style={{padding:'16px',color:'var(--text-muted)'}}>Loading daily revenue chart...</div>}
+              </div>
+              <div className="glass-card">
+                {dashCharts?.monthly_revenue ? <BarChart data={dashCharts.monthly_revenue} title="MONTHLY REVENUE (Last 6 Months)" color="#10b981" /> : <div style={{padding:'16px',color:'var(--text-muted)'}}>Loading monthly revenue chart...</div>}
+              </div>
+              <div className="glass-card">
+                {dashCharts?.patient_growth ? <BarChart data={dashCharts.patient_growth} title="PATIENT GROWTH (Last 6 Months)" color="#8b5cf6" valuePrefix="" /> : <div style={{padding:'16px',color:'var(--text-muted)'}}>Loading patient growth chart...</div>}
+              </div>
+              <div className="glass-card">
+                {dashCharts?.medicine_sales && dashCharts.medicine_sales.length > 0 ? <BarChart data={dashCharts.medicine_sales} title="TOP MEDICINE SALES" color="#f59e0b" /> : <div style={{padding:'16px',color:'var(--text-muted)'}}>No medicine sales data yet</div>}
+              </div>
+            </div>
+
+            {/* Alerts + Queue */}
+            <div className="form-grid no-print">
+              <div className="glass-card">
+                <h3 style={{marginBottom:'16px',display:'flex',alignItems:'center',gap:'8px'}}><AlertTriangle color="#f59e0b" size={20}/> Low Stock Alert</h3>
+                <div className="table-container">
+                  <table><thead><tr><th>Item</th><th>Category</th><th>Available</th><th>Min Stock</th></tr></thead>
+                    <tbody>
+                      {inventory.filter(i=>i.quantity<=i.min_stock_level).map(item=>(
+                        <tr key={item.id}><td>{item.name}</td><td>{item.category}</td><td style={{color:'#f43f5e',fontWeight:700}}>{item.quantity}</td><td>{item.min_stock_level}</td></tr>
+                      ))}
+                      {inventory.filter(i=>i.quantity<=i.min_stock_level).length===0&&<tr><td colSpan={4} style={{textAlign:'center',color:'#10b981'}}>✅ All stock levels are healthy</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div className="glass-card">
+                <h3>Today's OP Queue</h3>
+                <div className="table-container">
+                  <table><thead><tr><th>Token</th><th>Session</th><th>Patient</th><th>Status</th></tr></thead>
+                    <tbody>
+                      {tokens.filter(t=>t.date===new Date().toISOString().split('T')[0]).map(token=>(
+                        <tr key={token.id}>
+                          <td><div className="token-circle">{token.token_number}</div></td>
+                          <td>{token.session}</td><td>{token.patient?.name}</td>
+                          <td><span className={`badge badge-${(token.status || '').toLowerCase()}`}>{token.status}</span></td>
+                        </tr>
+                      ))}
+                      {tokens.filter(t=>t.date===new Date().toISOString().split('T')[0]).length===0&&<tr><td colSpan={4} style={{textAlign:'center',color:'var(--text-muted)'}}>No patients in queue today</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+              </>
+            ) : currentUser?.role === 'Doctor' ? (
+              <>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'16px',marginBottom:'20px'}}>
+                  <div className="glass-card stat-card" style={{borderLeft:'4px solid #3b82f6'}}>
+                    <div className="stat-icon" style={{backgroundColor:'rgba(59,130,246,0.15)',color:'#3b82f6'}}><Users size={24}/></div>
+                    <div>
+                      <label>Today's Appointments</label>
+                      <div className="stat-val">{tokens.filter(t => t.date === new Date().toISOString().split('T')[0]).length}</div>
+                    </div>
+                  </div>
+                  <div className="glass-card stat-card" style={{borderLeft:'4px solid #f59e0b'}}>
+                    <div className="stat-icon" style={{backgroundColor:'rgba(245,158,11,0.15)',color:'#f59e0b'}}><Clock size={24}/></div>
+                    <div>
+                      <label>Waiting Patients</label>
+                      <div className="stat-val">{tokens.filter(t => t.status === 'Pending').length}</div>
+                    </div>
+                  </div>
+                  <div className="glass-card stat-card" style={{borderLeft:'4px solid #8b5cf6'}}>
+                    <div className="stat-icon" style={{backgroundColor:'rgba(139,92,246,0.15)',color:'#8b5cf6'}}><Clipboard size={24}/></div>
+                    <div>
+                      <label>OP Patients (Active)</label>
+                      <div className="stat-val">{dashStats?.op_count ?? tokens.filter(t => t.date === new Date().toISOString().split('T')[0]).length}</div>
+                    </div>
+                  </div>
+                  <div className="glass-card stat-card" style={{borderLeft:'4px solid #10b981'}}>
+                    <div className="stat-icon" style={{backgroundColor:'rgba(16,185,129,0.15)',color:'#10b981'}}><Bed size={24}/></div>
+                    <div>
+                      <label>IP Patients (Admitted)</label>
+                      <div className="stat-val">{ipAdmissions.filter(a => a.status === 'Admitted').length}</div>
+                    </div>
+                  </div>
+                  
+                  <div className="glass-card stat-card" style={{borderLeft:'4px solid #ef4444'}}>
+                    <div className="stat-icon" style={{backgroundColor:'rgba(239,68,68,0.15)',color:'#ef4444'}}><AlertTriangle size={24}/></div>
+                    <div>
+                      <label>Emergency Patients</label>
+                      <div className="stat-val">{tokens.filter(t => t.session === 'Evening' && t.status === 'Pending').length}</div>
+                    </div>
+                  </div>
+                  <div className="glass-card stat-card" style={{borderLeft:'4px solid #0ea5e9'}}>
+                    <div className="stat-icon" style={{backgroundColor:'rgba(14,165,233,0.15)',color:'#0ea5e9'}}><RefreshCw size={24}/></div>
+                    <div>
+                      <label>Follow-up Patients</label>
+                      <div className="stat-val">{patients.filter(p => tokens.filter(t => t.patient_id === p.id).length > 1).length}</div>
+                    </div>
+                  </div>
+                  <div className="glass-card stat-card" style={{borderLeft:'4px solid #f43f5e'}}>
+                    <div className="stat-icon" style={{backgroundColor:'rgba(244,63,94,0.15)',color:'#f43f5e'}}><FlaskConical size={24}/></div>
+                    <div>
+                      <label>Pending Lab Results</label>
+                      <div className="stat-val">{labReports.filter(r => !r.result_value || r.result_value.trim() === '').length}</div>
+                    </div>
+                  </div>
+                  <div className="glass-card stat-card" style={{borderLeft:'4px solid #10b981'}}>
+                    <div className="stat-icon" style={{backgroundColor:'rgba(16,185,129,0.15)',color:'#10b981'}}><DollarSign size={24}/></div>
+                    <div>
+                      <label>Today's Revenue</label>
+                      <div className="stat-val">₹{dashStats ? dashStats.today_revenue.toFixed(2) : '0.00'}</div>
+                      <small style={{color:'var(--text-muted)'}}>View Only</small>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="form-grid no-print">
+                  <div className="glass-card">
+                    <h3 style={{marginBottom:'16px',display:'flex',alignItems:'center',gap:'8px'}}><Activity color="#3b82f6" size={20}/> Patient Statistics</h3>
+                    <div style={{display:'flex', gap:'20px', flexWrap:'wrap'}}>
+                      <div style={{flex:1, minWidth:'150px', background:'rgba(255,255,255,0.05)', padding:'15px', borderRadius:'10px'}}>
+                        <div style={{color:'var(--text-muted)', fontSize:'12px', marginBottom:'5px'}}>Total Registered Patients</div>
+                        <div style={{fontSize:'24px', fontWeight:'bold', color:'var(--text-primary)'}}>{dashStats?.total_patients ?? patients.length}</div>
+                      </div>
+                      <div style={{flex:1, minWidth:'150px', background:'rgba(255,255,255,0.05)', padding:'15px', borderRadius:'10px'}}>
+                        <div style={{color:'var(--text-muted)', fontSize:'12px', marginBottom:'5px'}}>Today's New Registrations</div>
+                        <div style={{fontSize:'24px', fontWeight:'bold', color:'var(--text-primary)'}}>{dashStats?.today_patients ?? patients.filter(p => new Date(p.created_at).toDateString() === new Date().toDateString()).length}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="glass-card">
+                    <h3 style={{marginBottom:'16px',display:'flex',alignItems:'center',gap:'8px'}}><FileText color="#8b5cf6" size={20}/> Recent Prescriptions</h3>
+                    <div style={{color:'var(--text-muted)', fontSize:'14px', fontStyle:'italic'}}>
+                      Prescriptions are generated directly via the OP Casesheet module. 
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div style={{padding:'40px', textAlign:'center', color:'var(--text-muted)'}}>
+                <h2>Welcome to MedBill Pro</h2>
+                <p>Select an option from the sidebar to begin.</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'reception_dashboard' && (
+          <div className="no-print">
+            <div className="header">
+              <div className="header-title">
+                <h1>Reception Dashboard</h1>
+                <p>Overview of today's activities</p>
+              </div>
+            </div>
+            <div className="form-grid" style={{ marginBottom: '24px' }}>
+              <div className="glass-card" style={{ textAlign: 'center' }}>
+                <Users size={32} color="#8b5cf6" style={{ marginBottom: '8px' }} />
+                <h3>{patients.filter(p => new Date(p.created_at).toDateString() === new Date().toDateString()).length}</h3>
+                <p style={{ color: 'var(--text-muted)' }}>New Registrations Today</p>
+              </div>
+              <div className="glass-card" style={{ textAlign: 'center' }}>
+                <Clipboard size={32} color="#3b82f6" style={{ marginBottom: '8px' }} />
+                <h3>{tokens.filter(t => new Date(t.date).toDateString() === new Date().toDateString()).length}</h3>
+                <p style={{ color: 'var(--text-muted)' }}>Tokens Today</p>
+              </div>
+              <div className="glass-card" style={{ textAlign: 'center' }}>
+                <Calendar size={32} color="#10b981" style={{ marginBottom: '8px' }} />
+                <h3>{appointments.filter(a => new Date(a.appointment_date).toDateString() === new Date().toDateString()).length}</h3>
+                <p style={{ color: 'var(--text-muted)' }}>Appointments Today</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'patients' && (
+          <div className="no-print">
+            <div className="header">
+              <div className="header-title">
+                <h1>Patient Registration</h1>
+                <p>Register new outpatients and issue UHID</p>
+              </div>
+              <button className="btn btn-secondary" style={{display:'flex', alignItems:'center', gap:'8px'}} onClick={() => exportToCSV(patients, 'Patients_List.csv')}><Download size={16}/> Export CSV</button>
+            </div>
+            <div className="glass-card">
+              <form onSubmit={handleRegisterPatient}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                  <div className="form-group">
+                    <label>Patient Full Name *</label>
+                    <input type="text" value={patientForm.name} onChange={e => setPatientForm({ ...patientForm, name: e.target.value })} required />
+                  </div>
+                  <div className="form-group">
+                    <label>Age *</label>
+                    <input type="number" value={patientForm.age || ''} onChange={e => setPatientForm({ ...patientForm, age: Number(e.target.value) })} required />
+                  </div>
+                  <div className="form-group">
+                    <label>Gender *</label>
+                    <select value={patientForm.gender} onChange={e => setPatientForm({ ...patientForm, gender: e.target.value })}>
+                      <option>Male</option>
+                      <option>Female</option>
+                      <option>Other</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Phone Number *</label>
+                    <input type="text" value={patientForm.phone} onChange={e => setPatientForm({ ...patientForm, phone: e.target.value })} required />
+                  </div>
+                  <div className="form-group">
+                    <label>Aadhaar Number</label>
+                    <input type="text" value={patientForm.aadhaar} onChange={e => setPatientForm({ ...patientForm, aadhaar: e.target.value })} />
+                  </div>
+                  <div className="form-group">
+                    <label>Blood Group</label>
+                    <select value={patientForm.blood_group} onChange={e => setPatientForm({ ...patientForm, blood_group: e.target.value })}>
+                      <option value="">-- Select --</option>
+                      <option>A+</option><option>A-</option><option>B+</option><option>B-</option>
+                      <option>AB+</option><option>AB-</option><option>O+</option><option>O-</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Guardian Name</label>
+                    <input type="text" value={patientForm.guardian_name} onChange={e => setPatientForm({ ...patientForm, guardian_name: e.target.value })} />
+                  </div>
+                  <div className="form-group">
+                    <label>Emergency Contact</label>
+                    <input type="text" value={patientForm.emergency_contact} onChange={e => setPatientForm({ ...patientForm, emergency_contact: e.target.value })} />
+                  </div>
+                  <div className="form-group">
+                    <label>Marital Status</label>
+                    <select value={patientForm.marital_status} onChange={e => setPatientForm({ ...patientForm, marital_status: e.target.value })}>
+                      <option>Single</option>
+                      <option>Married</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Patient Category</label>
+                    <select value={patientForm.patient_category} onChange={e => setPatientForm({ ...patientForm, patient_category: e.target.value })}>
+                      <option>General</option>
+                      <option>Corporate</option>
+                      <option>Insurance</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Insurance Details</label>
+                    <input type="text" value={patientForm.insurance_details} onChange={e => setPatientForm({ ...patientForm, insurance_details: e.target.value })} />
+                  </div>
+                  <div className="form-group">
+                    <label>Registration Type</label>
+                    <select value={patientForm.registration_type} onChange={e => setPatientForm({ ...patientForm, registration_type: e.target.value })}>
+                      <option>Walk-in</option>
+                      <option>Appointment</option>
+                    </select>
+                  </div>
+                  <div className="form-group" style={{ gridColumn: 'span 3' }}>
+                    <label>Address</label>
+                    <textarea rows={2} value={patientForm.address} onChange={e => setPatientForm({ ...patientForm, address: e.target.value })} />
+                  </div>
+                </div>
+                <div style={{ marginTop: '24px', display: 'flex', gap: '16px' }}>
+                  <button type="submit" className="btn btn-primary"><Plus size={18} /> Register Patient</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'op_token' && (
+          <div className="no-print">
+            <div className="header">
+              <div className="header-title">
+                <h1>Book OP Session Token & Check-in</h1>
+                <p>Generate consultation tokens and manage check-ins</p>
+              </div>
+            </div>
+            <div className="form-grid">
+              <div className="glass-card">
+                <h3 style={{ marginBottom: '16px' }}>Book Token</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div className="form-group">
+                    <label>Select Registered Patient</label>
+                    <Select
+                      options={patients.map(p => ({ value: p.id, label: `${p.name} (Age: ${p.age}, ${p.phone || 'No Phone'})` }))}
+                      onChange={(opt: any) => setSelectedPatientId(opt ? opt.value : '')}
+                      styles={selectStyles}
+                      isClearable
+                      placeholder="Search patient..."
+                    />
+                  </div>
+                  <div className="form-grid">
+                    <div className="form-group">
+                      <label>Department</label>
+                      <select value={tokenForm.department} onChange={e => setTokenForm({ ...tokenForm, department: e.target.value })}>
+                        <option>General Medicine</option>
+                        <option>Cardiology</option>
+                        <option>Orthopedics</option>
+                        <option>Pediatrics</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Consultation Type</label>
+                      <select value={tokenForm.consultation_type} onChange={e => setTokenForm({ ...tokenForm, consultation_type: e.target.value })}>
+                        <option>Routine</option>
+                        <option>Follow-up</option>
+                        <option>Emergency</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>OP Session</label>
+                      <select value={opSession} onChange={e => setOpSession(e.target.value as any)}>
+                        <option value="Morning">Morning OP Session</option>
+                        <option value="Evening">Evening OP Session</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Consultation Fee (₹)</label>
+                      <input type="number" value={opFee} onChange={e => setOpFee(Number(e.target.value))} />
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <input type="checkbox" checked={tokenForm.is_emergency} onChange={e => setTokenForm({ ...tokenForm, is_emergency: e.target.checked })} />
+                      Emergency Priority
+                    </label>
+                  </div>
+                  <button type="button" className="btn btn-primary" onClick={handleGenerateToken} style={{ marginTop: '8px' }}>
+                    <Clipboard size={18} /> Generate Token
+                  </button>
+                </div>
+              </div>
+              <div className="glass-card">
+                <h3 style={{ marginBottom: '16px' }}>Today's Tokens</h3>
+                <div className="table-container" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Token #</th>
+                        <th>Patient Name</th>
+                        <th>Session</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tokens.filter(t => new Date(t.date).toDateString() === new Date().toDateString()).map(token => (
+                        <tr key={token.id}>
+                          <td><strong>{token.token_number}</strong></td>
+                          <td>{token.patient?.name || 'Unknown'}</td>
+                          <td>{token.session}</td>
+                          <td>
+                            <span className={`badge ${(token.status || '').toLowerCase()}`}>{token.status}</span>
+                          </td>
+                          <td>
+                            <button className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={async () => {
+                              try {
+                                await axios.put(`${API_BASE}/tokens/${token.id}?status=Waiting`);
+                                loadAllData();
+                              } catch(e){}
+                            }}>Mark Waiting</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'appointments' && (
+          <div className="no-print">
+            <div className="header">
+              <div className="header-title">
+                <h1>Appointments</h1>
+                <p>Book and manage future appointments</p>
+              </div>
+            </div>
+            <div className="form-grid">
+              <div className="glass-card">
+                <h3 style={{ marginBottom: '16px' }}>Book Appointment</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div className="form-group">
+                    <label>Select Registered Patient</label>
+                    <Select
+                      options={patients.map(p => ({ value: p.id, label: `${p.name} (Age: ${p.age}, ${p.phone || 'No Phone'})` }))}
+                      onChange={(opt: any) => setAppointmentForm({ ...appointmentForm, patient_id: opt ? opt.value : '' })}
+                      styles={selectStyles}
+                      isClearable
+                    />
+                  </div>
+                  <div className="form-grid">
+                    <div className="form-group">
+                      <label>Appointment Date</label>
+                      <input type="date" value={appointmentForm.appointment_date} onChange={e => setAppointmentForm({ ...appointmentForm, appointment_date: e.target.value })} />
+                    </div>
+                    <div className="form-group">
+                      <label>Time Slot</label>
+                      <select value={appointmentForm.time_slot} onChange={e => setAppointmentForm({ ...appointmentForm, time_slot: e.target.value })}>
+                        <option>09:00 AM - 10:00 AM</option>
+                        <option>10:00 AM - 11:00 AM</option>
+                        <option>11:00 AM - 12:00 PM</option>
+                        <option>04:00 PM - 05:00 PM</option>
+                        <option>05:00 PM - 06:00 PM</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label>Reason for Visit</label>
+                    <input type="text" value={appointmentForm.reason} onChange={e => setAppointmentForm({ ...appointmentForm, reason: e.target.value })} />
+                  </div>
+                  <button type="button" className="btn btn-primary" onClick={async () => {
+                    if(!appointmentForm.patient_id) return alert("Select patient");
+                    try {
+                      await axios.post(`${API_BASE}/appointments/`, {
+                        ...appointmentForm,
+                        patient_id: Number(appointmentForm.patient_id),
+                        doctor_id: appointmentForm.doctor_id ? Number(appointmentForm.doctor_id) : null
+                      });
+                      alert("Appointment booked!");
+                      loadAllData();
+                    } catch(e) { console.error(e); }
+                  }}>
+                    <Calendar size={18} /> Book Appointment
+                  </button>
+                </div>
+              </div>
+              <div className="glass-card">
+                <h3 style={{ marginBottom: '16px' }}>Upcoming Appointments</h3>
+                <div className="table-container" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Date & Time</th>
+                        <th>Patient</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {appointments.map(a => (
+                        <tr key={a.id}>
+                          <td>{a.appointment_date} <br/><small>{a.time_slot}</small></td>
+                          <td>{a.patient?.name}</td>
+                          <td>{a.status}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'live_queue' && (
+          <div className="no-print">
+            <div className="header">
+              <div className="header-title">
+                <h1>Live Queue</h1>
+                <p>Monitor patient waiting list</p>
+              </div>
+            </div>
+            <div className="glass-card">
+              <h3 style={{ marginBottom: '16px' }}>Waiting Patients</h3>
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Token #</th>
+                      <th>Patient Name</th>
+                      <th>Department</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tokens.filter(t => new Date(t.date).toDateString() === new Date().toDateString() && t.status !== 'Completed').map(token => (
+                      <tr key={token.id}>
+                        <td style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{token.token_number}</td>
+                        <td>{token.patient?.name}</td>
+                        <td>{token.details?.department || 'General'}</td>
+                        <td>
+                          <span className={`badge ${(token.status || '').toLowerCase()}`}>{token.status}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'casesheet' && (
+          <div className="no-print">
+            <div className="header">
+              <div className="header-title">
+                <h1>Doctor Consultation & Patient Management</h1>
+                <p>Manage patients, view history, write prescriptions and order labs.</p>
+              </div>
+            </div>
+
+            {/* If NO patient is selected globally in the Doctor tab */}
+            {!selectedDoctorPatientId && (
+              <div className="form-grid">
+                <div className="glass-card" style={{ gridColumn: 'span 2' }}>
+                  <h3 style={{ marginBottom: '16px' }}>Search & Select Patient</h3>
+                  <SearchableDropdown 
+                    options={patients.map((p: any) => ({
+                      label: `${p.id} - ${p.name} - ${p.phone}`,
+                      value: p.id,
+                      id: p.id,
+                      name: p.name,
+                      phone: p.phone,
+                      uhid: p.aadhaar || '',
+                    }))}
+                    value={selectedDoctorPatientId}
+                    onChange={(val: any) => setSelectedDoctorPatientId(val)}
+                    placeholder="Search Patient ID, Name, Mobile, UHID..."
+                    searchKeys={['id', 'name', 'phone', 'uhid']}
+                  />
+                </div>
+
+                <div className="glass-card" style={{ gridColumn: 'span 2' }}>
+                  <h3 style={{ marginBottom: '16px' }}>Today's Active Queue</h3>
+                  <div className="table-container">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Token</th>
+                          <th>Session</th>
+                          <th>Patient</th>
+                          <th>Age/Gender</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tokens.filter(t => t.status === 'Pending').map(token => (
+                          <tr key={token.id}>
+                            <td><div className="token-circle">{token.token_number}</div></td>
+                            <td>{token.session}</td>
+                            <td><strong>{token.patient?.name}</strong></td>
+                            <td>{token.patient?.age} / {token.patient?.gender}</td>
+                            <td>
+                              <button className="btn btn-primary" onClick={() => {
+                                setSelectedDoctorPatientId(token.patient_id);
+                                setSelectedOPToken(token);
+                              }}>
+                                Open Record
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {tokens.filter(t => t.status === 'Pending').length === 0 && (
+                          <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No patients in queue</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* If a patient IS selected */}
+            {selectedDoctorPatientId && (() => {
+              const patient = patients.find(p => p.id === selectedDoctorPatientId);
+              const activeToken = tokens.find(t => t.patient_id === selectedDoctorPatientId && t.status === 'Pending');
+              const previousVisits = tokens.filter(t => t.patient_id === selectedDoctorPatientId && t.status !== 'Pending');
+              const patientLabOrders = labOrders.filter(o => o.patient_id === selectedDoctorPatientId);
+
+              if (!patient) return <div>Patient not found.</div>;
+
+              return (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
+                    <button className="btn btn-secondary" onClick={() => { setSelectedDoctorPatientId(null); setSelectedOPToken(null); }}><ChevronDown size={18} style={{transform: 'rotate(90deg)'}}/> Back to Dashboard</button>
+                    {!selectedOPToken && (
+                      <div style={{ display: 'flex', gap: '10px' }}>
+                        <button className="btn btn-primary" onClick={() => handleCreateDirectConsultation("New Visit")} >+ New Consultation</button>
+                        <button className="btn btn-secondary" onClick={() => handleCreateDirectConsultation("Follow-up")} >Follow-up</button>
+                        <button className="btn btn-danger" onClick={() => handleCreateDirectConsultation("Emergency")} >Emergency</button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Comprehensive Patient Context View */}
+                  <div className="glass-card" style={{ marginBottom: '24px', background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                    <h3 style={{ marginBottom: '16px', color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <UserRound size={20}/> {patient.name} 
+                    </h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '15px' }}>
+                      <div><small style={{color:'var(--text-muted)'}}>Patient ID</small><br/><strong>{patient.id}</strong></div>
+                      <div><small style={{color:'var(--text-muted)'}}>Age / Gender</small><br/><strong>{patient.age} / {patient.gender}</strong></div>
+                      <div><small style={{color:'var(--text-muted)'}}>Blood Group</small><br/><strong>{patient.blood_group || 'N/A'}</strong></div>
+                      <div><small style={{color:'var(--text-muted)'}}>Mobile</small><br/><strong>{patient.phone || 'N/A'}</strong></div>
+                      <div><small style={{color:'var(--text-muted)'}}>UHID / Aadhaar</small><br/><strong>{patient.aadhaar || 'N/A'}</strong></div>
+                      <div><small style={{color:'var(--text-muted)'}}>Previous Visits</small><br/><strong>{previousVisits.length}</strong></div>
+                    </div>
+                  </div>
+
+                  {/* Main Interaction Area: split into History and Active Consultation */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '24px' }}>
+                    
+                    {/* LEFT COLUMN: History */}
+                    <div>
+                      <div className="glass-card" style={{ marginBottom: '20px' }}>
+                        <h4 style={{marginBottom:'15px', display:'flex', alignItems:'center', gap:'8px'}}><Clock size={18}/> Patient History</h4>
+                        <div style={{maxHeight: '300px', overflowY: 'auto'}}>
+                          {previousVisits.map((v, i) => (
+                            <div key={i} style={{padding: '10px', borderBottom: '1px solid var(--border)'}}>
+                              <small>{new Date(v.created_at || Date.now()).toLocaleDateString()}</small><br/>
+                              <strong>Dr. {v.doctor_name || 'N/A'}</strong> - {v.session}
+                            </div>
+                          ))}
+                          {previousVisits.length === 0 && <span style={{color:'var(--text-muted)', fontSize:'12px'}}>No previous visits found.</span>}
+                        </div>
+                      </div>
+
+                      <div className="glass-card">
+                        <h4 style={{marginBottom:'15px', display:'flex', alignItems:'center', gap:'8px'}}><FlaskConical size={18}/> Previous Labs</h4>
+                        <div style={{maxHeight: '300px', overflowY: 'auto'}}>
+                          {patientLabOrders.map((o, i) => {
+                            const test = labTestMasters.find(t => t.id === o.test_id);
+                            return (
+                              <div key={i} style={{padding: '10px', borderBottom: '1px solid var(--border)', display:'flex', justifyContent:'space-between'}}>
+                                <div>
+                                  <strong>{test?.test_name || 'Test'}</strong><br/>
+                                  <small>{new Date(o.created_at || Date.now()).toLocaleDateString()}</small>
+                                </div>
+                                <div>
+                                  <span className={`status-badge ${(o.status||'').replace(' ','-').toLowerCase()}`}>{o.status}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {patientLabOrders.length === 0 && <span style={{color:'var(--text-muted)', fontSize:'12px'}}>No lab orders found.</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* RIGHT COLUMN: Active Consultation */}
+                    <div className="glass-card">
+                      {!selectedOPToken ? (
+                        <div style={{textAlign: 'center', padding: '50px 20px'}}>
+                          <Activity size={48} color="var(--text-muted)" style={{marginBottom:'16px'}}/>
+                          <h3>No Active Consultation</h3>
+                          <p style={{color:'var(--text-muted)', marginTop:'8px'}}>Select a patient from today's queue or click 'New Consultation' to start.</p>
+                          {activeToken && (
+                            <button className="btn btn-primary" style={{marginTop:'20px'}} onClick={() => setSelectedOPToken(activeToken)}>
+                              Resume Active Consultation (Token #{activeToken.token_number})
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '16px', marginBottom: '24px' }}>
+                            <h3 style={{ color: '#f59e0b' }}>Active Consultation</h3>
+                            <div>
+                              <span style={{marginRight: '15px'}}><strong>Token:</strong> {selectedOPToken.token_number}</span>
+                              <span><strong>Session:</strong> {selectedOPToken.session}</span>
+                            </div>
+                          </div>
+
+                          <div className="form-grid">
+                            <div className="form-group"><label>Vitals - BP</label><input type="text" placeholder="120/80" value={casesheetForm.vitalsBp} onChange={e => setCasesheetForm({ ...casesheetForm, vitalsBp: e.target.value })} /></div>
+                            <div className="form-group"><label>Vitals - Pulse</label><input type="text" placeholder="72" value={casesheetForm.vitalsPulse} onChange={e => setCasesheetForm({ ...casesheetForm, vitalsPulse: e.target.value })} /></div>
+                            <div className="form-group"><label>Vitals - Temp (°F)</label><input type="text" placeholder="98.6" value={casesheetForm.vitalsTemp} onChange={e => setCasesheetForm({ ...casesheetForm, vitalsTemp: e.target.value })} /></div>
+                          </div>
+
+                          <h4 style={{ marginTop: '24px', marginBottom: '16px', color: '#3b82f6' }}>Clinical Details</h4>
+                          <div className="form-grid">
+                            <div className="form-group"><label>Chief Complaint</label><textarea rows={2} value={casesheetForm.chiefComplaint} onChange={e => setCasesheetForm({ ...casesheetForm, chiefComplaint: e.target.value })} /></div>
+                            <div className="form-group"><label>Clinical Findings</label><textarea rows={2} value={casesheetForm.clinicalFindings} onChange={e => setCasesheetForm({ ...casesheetForm, clinicalFindings: e.target.value })} /></div>
+                            <div className="form-group"><label>Diagnosis</label><textarea rows={2} value={casesheetForm.diagnosis} onChange={e => setCasesheetForm({ ...casesheetForm, diagnosis: e.target.value })} /></div>
+                            <div className="form-group"><label>Treatment Plan</label><textarea rows={2} value={casesheetForm.treatmentPlan} onChange={e => setCasesheetForm({ ...casesheetForm, treatmentPlan: e.target.value })} /></div>
+                          </div>
+
+                          {/* Direct Lab Orders */}
+                          <div style={{ background: 'rgba(0,0,0,0.1)', padding: '16px', borderRadius: '8px', marginTop: '24px' }}>
+                            <h4 style={{ marginBottom: '16px', color: '#10b981', display:'flex', alignItems:'center', gap:'8px' }}>
+                              <TestTube size={18}/> Order Laboratory Tests
+                            </h4>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px' }}>
+                              {labTestMasters.map(test => (
+                                <label key={test.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', background:'var(--surface)', padding:'8px', borderRadius:'4px' }}>
+                                  <input type="checkbox" checked={casesheetLabs.includes(test.test_name)} onChange={() => toggleLab(test.test_name)} />
+                                  <span>{test.test_name}</span>
+                                </label>
+                              ))}
+                              {labTestMasters.length === 0 && <span style={{ color: 'var(--text-muted)' }}>No tests configured.</span>}
+                            </div>
+                          </div>
+
+                          {/* Prescription */}
+                          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '24px', marginTop: '24px' }}>
+                            <h4 style={{ marginBottom: '16px', color: '#8b5cf6', display:'flex', alignItems:'center', gap:'8px' }}>
+                              <Pill size={18}/> Prescribe Medicines
+                            </h4>
+                            <div className="form-grid" style={{ alignItems: 'flex-end', background: 'var(--surface)', padding: '16px', borderRadius: '8px', border:'1px solid var(--border)' }}>
+                              <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                                <label>Select Medicine</label>
+                                <Select 
+                                  styles={selectStyles}
+                                  options={inventory.filter(i => i.category === 'Pharmacy').map(item => ({ value: item.id, label: `${item.name} (Stock: ${item.quantity})` }))}
+                                  value={newMed.medicine_id ? { value: newMed.medicine_id, label: inventory.find(i=>i.id === newMed.medicine_id)?.name || '' } : null}
+                                  onChange={(opt: any) => setNewMed({ ...newMed, medicine_id: opt ? opt.value : 0 })}
+                                  placeholder="-- Select Medicine --"
+                                />
+                              </div>
+                              
+                              <div className="form-group" style={{ gridColumn: 'span 2', display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
+                                <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                  <span style={{fontSize:'12px', color:'var(--text-muted)'}}>Morning</span>
+                                  <input type="checkbox" checked={newMed.timing_morning} onChange={e => setNewMed({...newMed, timing_morning: e.target.checked})} style={{width:'20px', height:'20px'}} />
+                                </label>
+                                <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                  <span style={{fontSize:'12px', color:'var(--text-muted)'}}>Afternoon</span>
+                                  <input type="checkbox" checked={newMed.timing_afternoon} onChange={e => setNewMed({...newMed, timing_afternoon: e.target.checked})} style={{width:'20px', height:'20px'}} />
+                                </label>
+                                <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                  <span style={{fontSize:'12px', color:'var(--text-muted)'}}>Night</span>
+                                  <input type="checkbox" checked={newMed.timing_night} onChange={e => setNewMed({...newMed, timing_night: e.target.checked})} style={{width:'20px', height:'20px'}} />
+                                </label>
+                              </div>
+
+                              <div className="form-group">
+                                <label>Relation</label>
+                                <select value={newMed.timing_relation} onChange={e => setNewMed({...newMed, timing_relation: e.target.value})}>
+                                  <option>After Food</option>
+                                  <option>Before Food</option>
+                                  <option>With Food</option>
+                                </select>
+                              </div>
+
+                              <div className="form-group">
+                                <label>Days</label>
+                                <input type="number" min={1} value={newMed.duration} onChange={e => setNewMed({ ...newMed, duration: e.target.value })} />
+                              </div>
+
+                              <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                                <label>Instructions</label>
+                                <input type="text" value={newMed.instructions} onChange={e => setNewMed({ ...newMed, instructions: e.target.value })} />
+                              </div>
+
+                              <button className="btn btn-secondary" onClick={addMedicineToPrescription} style={{ height: '42px', gridColumn: 'span 2' }}>
+                                <Plus size={18} /> Add
+                              </button>
+                            </div>
+
+                            {casesheetMeds.length > 0 && (
+                              <div className="table-container" style={{ marginTop: '16px' }}>
+                                <table>
+                                  <thead>
+                                    <tr>
+                                      <th>Medicine</th>
+                                      <th>Timing</th>
+                                      <th>Relation</th>
+                                      <th>Days</th>
+                                      <th>Action</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {casesheetMeds.map((med, idx) => (
+                                      <tr key={idx}>
+                                        <td><strong>{med.name}</strong></td>
+                                        <td>{med.timing_morning ? '1' : '0'}-{med.timing_afternoon ? '1' : '0'}-{med.timing_night ? '1' : '0'}</td>
+                                        <td>{med.timing_relation}</td>
+                                        <td>{med.duration}</td>
+                                        <td><button className="btn btn-danger" style={{ padding: '4px' }} onClick={() => removeMedicineFromPrescription(idx)}><Trash2 size={14} /></button></td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="no-print" style={{ marginTop: '32px', display: 'flex', gap: '16px' }}>
+                            <button className="btn btn-secondary" onClick={() => handleSaveCasesheet(false)}>Save Draft</button>
+                            <button className="btn btn-primary" onClick={() => handleSaveCasesheet(true)}>Finalize Consultation</button>
+                            <button className="btn btn-secondary" onClick={() => window.print()}><Printer size={18} /> Print Rx</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+        {activeTab === 'pharmacy' && (
+          <div className="no-print">
+            <div className="header">
+              <div className="header-title">
+                <h1>Pharmacy Billing Engine</h1>
+                <p>Create invoice. Automatically decreases remaining stock count.</p>
+              </div>
+            </div>
+
+            <div className="form-grid">
+              
+              {/* Checkout details & Patient Selection */}
+              <div className="glass-card" style={{ gridColumn: 'span 2' }}>
+                <h3 style={{ marginBottom: '16px' }}>1. Patient & Prescription Details</h3>
+                <div className="form-grid" style={{ alignItems: 'flex-end' }}>
+                  <div className="form-group">
+                    <label>Patient Type</label>
+                    <select value={billingPatientType} onChange={e => setBillingPatientType(e.target.value as any)}>
+                      <option value="walkin">Walk-in Patient</option>
+                      <option value="registered">Registered Patient</option>
+                    </select>
+                  </div>
+
+                  {billingPatientType === 'walkin' ? (
+                    <div className="form-group">
+                      <label>Walk-in Patient Name</label>
+                      <input type="text" placeholder="Enter patient name" value={billingWalkInName} onChange={e => setBillingWalkInName(e.target.value)} />
+                    </div>
+                  ) : (
+                    <div className="form-group">
+                      <label>Select Registered Patient</label>
+                      <select value={billingPatientId} onChange={e => setBillingPatientId(e.target.value === '' ? '' : Number(e.target.value))}>
+                        <option value="">-- Choose Patient --</option>
+                        {patients.map(p => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {billingPatientType === 'registered' && (
+                    <button className="btn btn-primary" onClick={() => handleLoadPrescription(Number(billingPatientId))} disabled={!billingPatientId} style={{ height: '42px' }}>
+                      <FileText size={18} /> Load Prescription
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Basket / Cart */}
+              <div className="glass-card" style={{ gridColumn: 'span 2' }}>
+                <h3 style={{ marginBottom: '16px' }}>2. Add Medicines to Bill</h3>
+                <div className="form-grid" style={{ alignItems: 'flex-end' }}>
+                  
+                  {/* Barcode Scanner */}
+                  <div className="form-group">
+                     <label style={{color: '#8b5cf6'}}>Scan Barcode</label>
+                     <input type="text" placeholder="Scan and press Enter..." value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)} onKeyDown={handleBarcodeScan} autoFocus />
+                  </div>
+
+                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                    <label>Or Select Medicine Manually</label>
+                    <Select 
+                      styles={selectStyles}
+                      options={inventory.filter(i => i.category === 'Pharmacy').map(item => ({ value: String(item.id), label: `${item.name} (Stock Available: ${item.quantity} | Price: ₹${item.unit_price})` }))}
+                      value={billingNewItem.medicine_id ? { value: String(billingNewItem.medicine_id), label: (() => { const i = inventory.find(x => x.id === billingNewItem.medicine_id); return i ? `${i.name} (Stock Available: ${i.quantity} | Price: ₹${i.unit_price})` : ''; })() } : null}
+                      onChange={(sel: any) => setBillingNewItem({ ...billingNewItem, medicine_id: sel ? Number(sel.value) : 0 })}
+                      placeholder="-- Select Medicine --"
+                      isClearable
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Quantity</label>
+                    <input type="number" min={1} value={billingNewItem.quantity} onChange={e => setBillingNewItem({ ...billingNewItem, quantity: Number(e.target.value) })} />
+                  </div>
+                  <button className="btn btn-secondary" onClick={addToCart} style={{ height: '42px' }}>
+                    Add to Cart
+                  </button>
+                </div>
+
+                <div className="table-container" style={{ marginTop: '24px' }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Item Name</th>
+                        <th>Qty</th>
+                        <th>Unit Price</th>
+                        <th>Total</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {billingCart.map(item => (
+                        <tr key={item.medicine_id}>
+                          <td>{item.name}</td>
+                          <td>{item.quantity}</td>
+                          <td>₹{item.unit_price.toFixed(2)}</td>
+                          <td>₹{(item.quantity * item.unit_price).toFixed(2)}</td>
+                          <td>
+                            <button className="btn btn-danger" style={{ padding: '6px' }} onClick={() => removeFromCart(item.medicine_id)}>
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {billingCart.length === 0 && (
+                        <tr>
+                          <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>Cart is empty</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Billing Summary */}
+              <div className="glass-card">
+                <h3 style={{ marginBottom: '16px' }}>3. Billing Summary</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+                  <div className="form-grid" style={{ marginTop: '8px' }}>
+                    <div className="form-group">
+                      <label>Discount (%)</label>
+                      <input type="number" min={0} max={100} value={billingDiscount} onChange={e => setBillingDiscount(Number(e.target.value))} />
+                    </div>
+                    <div className="form-group">
+                      <label>GST (%)</label>
+                      <input type="number" min={0} max={100} value={billingGst} onChange={e => setBillingGst(Number(e.target.value))} />
+                    </div>
+                  </div>
+
+                  {/* Pricing Breakdown */}
+                  <div style={{ background: 'rgba(0,0,0,0.2)', padding: '16px', borderRadius: '12px', marginTop: '16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span>Subtotal:</span>
+                      <span>₹{cartSubtotal.toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', color: '#f43f5e' }}>
+                      <span>Discount ({billingDiscount}%):</span>
+                      <span>-₹{cartDiscountAmt.toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span>GST ({billingGst}%):</span>
+                      <span>₹{cartGstAmt.toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '1.1rem', borderTop: '1px solid var(--border)', paddingTop: '8px', marginTop: '8px', color: '#60a5fa' }}>
+                      <span>Grand Total:</span>
+                      <span>₹{cartTotal.toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  <button className="btn btn-primary" onClick={handleCheckoutBill} style={{ marginTop: '16px' }}>
+                    Deduct Stock & Generate Bill
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'inventory' && (
+          <div className="no-print">
+            <div className="header">
+              <div className="header-title">
+                <h1>Stock & Inventory Control</h1>
+                <p>Manage stock levels, batch details, and low-level alerts</p>
+              </div>
+              <button className="btn btn-secondary" style={{display:'flex', alignItems:'center', gap:'8px'}} onClick={() => exportToCSV(inventory, 'Inventory_Stock.csv')}><Download size={16}/> Export CSV</button>
+            </div>
+
+            <div className="form-grid">
+              <div className="glass-card" style={{ gridColumn: 'span 2' }}>
+                <h3 style={{ marginBottom: '16px' }}>Stock Inventory</h3>
+                <div className="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Item Name</th>
+                        <th>Category</th>
+                        <th>Batch</th>
+                        <th>Expiry</th>
+                        <th>Remaining Stock</th>
+                        <th>Unit Price</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {inventory.filter(i => i.name.toLowerCase().includes(inventorySearch.toLowerCase()) || i.category.toLowerCase().includes(inventorySearch.toLowerCase()) || (i.batch_no && i.batch_no.toLowerCase().includes(inventorySearch.toLowerCase()))).map(item => (
+                        <tr key={item.id}>
+                          <td>{item.id}</td>
+                          <td><strong>{item.name}</strong></td>
+                          <td>{item.category}</td>
+                          <td>{item.batch_no || 'N/A'}</td>
+                          <td>{item.expiry_date || 'N/A'}</td>
+                          <td style={{ fontWeight: 600 }}>{item.quantity}</td>
+                          <td>₹{item.unit_price.toFixed(2)}</td>
+                          <td>
+                            {item.quantity <= item.min_stock_level ? (
+                              <span className="badge badge-pending">Low Stock</span>
+                            ) : (
+                              <span className="badge badge-completed">Good</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="glass-card">
+                <h3 style={{ marginBottom: '16px' }}>Medicine Master (Add New Stock)</h3>
+                <form onSubmit={handleSaveInventoryItem}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    
+                    {/* Basic Info */}
+                    <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                      <h4 style={{ marginBottom: '12px', color: '#3b82f6' }}>Basic Details</h4>
+                      <div className="form-grid">
+                        <div className="form-group"><label>Item Name *</label><input type="text" value={inventoryForm.name} onChange={e => setInventoryForm({ ...inventoryForm, name: e.target.value })} required /></div>
+                        <div className="form-group"><label>Generic Name</label><input type="text" value={inventoryForm.details.genericName} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, genericName: e.target.value } })} /></div>
+                        <div className="form-group"><label>Brand Name</label><input type="text" value={inventoryForm.details.brandName} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, brandName: e.target.value } })} /></div>
+                        <div className="form-group"><label>Category *</label>
+                          <select value={inventoryForm.category} onChange={e => setInventoryForm({ ...inventoryForm, category: e.target.value })}>
+                            <option>Pharmacy</option><option>Lab</option><option>Consumable</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Identifiers & Clinical */}
+                    <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                      <h4 style={{ marginBottom: '12px', color: '#10b981' }}>Identifiers & Clinical</h4>
+                      <div className="form-grid">
+                        <div className="form-group"><label>Medicine Code</label><input type="text" value={inventoryForm.details.medicineCode} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, medicineCode: e.target.value } })} /></div>
+                        <div className="form-group"><label>Barcode</label><input type="text" value={inventoryForm.details.barcode} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, barcode: e.target.value } })} placeholder="Scan Barcode here..." /></div>
+                        <div className="form-group"><label>Manufacturer</label><input type="text" value={inventoryForm.details.manufacturer} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, manufacturer: e.target.value } })} /></div>
+                        <div className="form-group"><label>Dosage Form</label><input type="text" placeholder="Tablet, Syrup, Injection..." value={inventoryForm.details.dosageForm} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, dosageForm: e.target.value } })} /></div>
+                        <div className="form-group"><label>Strength</label><input type="text" placeholder="500mg, 10ml..." value={inventoryForm.details.strength} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, strength: e.target.value } })} /></div>
+                        <div className="form-group"><label>Schedule Type</label><input type="text" placeholder="H, H1, X..." value={inventoryForm.details.scheduleType} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, scheduleType: e.target.value } })} /></div>
+                      </div>
+                    </div>
+
+                    {/* Financials & Stock */}
+                    <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                      <h4 style={{ marginBottom: '12px', color: '#f59e0b' }}>Financials & Inventory</h4>
+                      <div className="form-grid">
+                        <div className="form-group"><label>Batch No</label><input type="text" value={inventoryForm.batch_no} onChange={e => setInventoryForm({ ...inventoryForm, batch_no: e.target.value })} /></div>
+                        <div className="form-group"><label>Expiry Date</label><input type="date" value={inventoryForm.expiry_date} onChange={e => setInventoryForm({ ...inventoryForm, expiry_date: e.target.value })} /></div>
+                        <div className="form-group"><label>Initial Qty *</label><input type="number" value={inventoryForm.quantity || ''} onChange={e => setInventoryForm({ ...inventoryForm, quantity: Number(e.target.value) })} required /></div>
+                        <div className="form-group"><label>Min Stock Level</label><input type="number" value={inventoryForm.min_stock_level || ''} onChange={e => setInventoryForm({ ...inventoryForm, min_stock_level: Number(e.target.value) })} /></div>
+                        <div className="form-group"><label>Max Stock</label><input type="number" value={inventoryForm.details.maxStock || ''} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, maxStock: Number(e.target.value) } })} /></div>
+                        <div className="form-group"><label>Selling Price (₹) *</label><input type="number" step="0.01" value={inventoryForm.unit_price || ''} onChange={e => setInventoryForm({ ...inventoryForm, unit_price: Number(e.target.value) })} required /></div>
+                        <div className="form-group"><label>MRP (₹)</label><input type="number" step="0.01" value={inventoryForm.details.mrp || ''} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, mrp: Number(e.target.value) } })} /></div>
+                        <div className="form-group"><label>Purchase Price (₹)</label><input type="number" step="0.01" value={inventoryForm.details.purchasePrice || ''} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, purchasePrice: Number(e.target.value) } })} /></div>
+                        <div className="form-group"><label>HSN Code</label><input type="text" value={inventoryForm.details.hsnCode} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, hsnCode: e.target.value } })} /></div>
+                        <div className="form-group"><label>GST %</label><input type="number" value={inventoryForm.details.gstPercent || ''} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, gstPercent: Number(e.target.value) } })} /></div>
+                        <div className="form-group"><label>Rack Number</label><input type="text" value={inventoryForm.details.rackNumber} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, rackNumber: e.target.value } })} /></div>
+                        <div className="form-group"><label>Storage Location</label><input type="text" value={inventoryForm.details.storageLocation} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, storageLocation: e.target.value } })} /></div>
+                      </div>
+                    </div>
+
+                    <div className="form-group">
+                      <label>Medicine Description / Notes</label>
+                      <textarea rows={2} value={inventoryForm.details.description} onChange={e => setInventoryForm({ ...inventoryForm, details: { ...inventoryForm.details, description: e.target.value } })} />
+                    </div>
+
+                    <button type="submit" className="btn btn-primary" style={{ alignSelf: 'flex-start' }}><Plus size={18} /> Save Medicine Master</button>
+                  </div>
+                </form>
+              </div>
+
+              {/* Purchase / GRN Module */}
+              <div className="glass-card" style={{ gridColumn: 'span 2' }}>
+                <h3 style={{ marginBottom: '16px', color: '#10b981' }}>Purchase & GRN (Goods Received Note)</h3>
+                <form onSubmit={handleSaveGRN}>
+                  <div className="form-grid">
+                    <div className="form-group">
+                      <label>Select Medicine *</label>
+                      <Select
+                        options={inventory.filter(i => i.name.toLowerCase().includes(inventorySearch.toLowerCase()) || i.category.toLowerCase().includes(inventorySearch.toLowerCase()) || (i.batch_no && i.batch_no.toLowerCase().includes(inventorySearch.toLowerCase()))).map(item => ({ value: String(item.id), label: `${item.name} (Current Stock: ${item.quantity})` }))}
+                        value={grnForm.medicine_id ? { value: grnForm.medicine_id, label: inventory.find(i=>String(i.id) === grnForm.medicine_id)?.name || '' } : null}
+                        onChange={(sel: any) => setGrnForm({ ...grnForm, medicine_id: sel?.value || '' })}
+                        styles={selectStyles}
+                        isClearable
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Quantity Received *</label>
+                      <input type="number" min="1" value={grnForm.quantity || ''} onChange={e => setGrnForm({ ...grnForm, quantity: Number(e.target.value) })} required />
+                    </div>
+                    <div className="form-group">
+                      <label>Supplier Name</label>
+                      <input type="text" value={grnForm.details.supplierName} onChange={e => setGrnForm({ ...grnForm, details: { ...grnForm.details, supplierName: e.target.value } })} />
+                    </div>
+                    <div className="form-group">
+                      <label>Purchase Order No.</label>
+                      <input type="text" value={grnForm.details.purchaseOrder} onChange={e => setGrnForm({ ...grnForm, details: { ...grnForm.details, purchaseOrder: e.target.value } })} />
+                    </div>
+                    <div className="form-group">
+                      <label>Invoice Number</label>
+                      <input type="text" value={grnForm.details.invoiceNumber} onChange={e => setGrnForm({ ...grnForm, details: { ...grnForm.details, invoiceNumber: e.target.value } })} />
+                    </div>
+                    <div className="form-group">
+                      <label>Transaction Notes</label>
+                      <input type="text" value={grnForm.notes} onChange={e => setGrnForm({ ...grnForm, notes: e.target.value })} />
+                    </div>
+                  </div>
+                  <button type="submit" className="btn btn-primary" style={{ marginTop: '16px' }}><Plus size={18} /> Process GRN (Stock In)</button>
+                </form>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'reports' && (
+          <div>
+            {!viewInvoice ? (
+              <div className="glass-card no-print">
+                <h3 style={{ marginBottom: '16px' }}>Pharmacy Billing Invoices Report</h3>
+                <div className="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Bill ID</th>
+                        <th>Bill Date</th>
+                        <th>Patient Name</th>
+                        <th>Bill Total</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pharmacyBills.map(bill => (
+                        <tr key={bill.id}>
+                          <td>#{bill.id}</td>
+                          <td>{new Date(bill.bill_date).toLocaleString()}</td>
+                          <td>{bill.patient_name || patients.find(p => p.id === bill.patient_id)?.name || 'Walk-in'}</td>
+                          <td><strong>₹{bill.total.toFixed(2)}</strong></td>
+                          <td>
+                            <button className="btn btn-secondary" style={{ padding: '6px 12px' }} onClick={() => setViewInvoice(bill)}>
+                              View Invoice
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {pharmacyBills.length === 0 && (
+                        <tr>
+                          <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No invoices generated yet</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div>
+                {/* Print Invoice details */}
+                <button className="btn btn-secondary no-print" onClick={() => setViewInvoice(null)} style={{ marginBottom: '20px' }}>
+                  ← Back to Report
+                </button>
+                <button className="btn btn-primary no-print" onClick={() => window.print()} style={{ marginBottom: '20px', marginLeft: '12px' }}>
+                  <Printer size={16} /> Print Invoice
+                </button>
+
+                <div className="glass-card print-bill-container" style={{ maxWidth: '600px', margin: '0 auto', padding: '32px' }}>
+                  <div style={{ textAlign: 'center', borderBottom: '2px solid #ddd', paddingBottom: '16px', marginBottom: '24px' }}>
+                    <h2 style={{ color: '#111', fontSize: '1.6rem', fontWeight: 800 }}>HOSPITAL PHARMACY INVOICE</h2>
+                    <p style={{ color: '#666', fontSize: '0.9rem', marginTop: '4px' }}>MedBill Medical Centre & Pharmacy</p>
+                    <p style={{ color: '#666', fontSize: '0.8rem' }}>123 Hospital Road, Chennai</p>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', fontSize: '0.9rem', color: '#333', marginBottom: '24px' }}>
+                    <div>
+                      <p><strong>Bill ID:</strong> #{viewInvoice.id}</p>
+                      <p><strong>Date:</strong> {new Date(viewInvoice.bill_date).toLocaleString()}</p>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <p><strong>Patient Name:</strong> {viewInvoice.patient_name || patients.find(p => p.id === viewInvoice.patient_id)?.name || 'Walk-in'}</p>
+                      {viewInvoice.patient_id && <p><strong>Patient ID:</strong> {viewInvoice.patient_id}</p>}
+                      {viewInvoice.patient_id && patients.find(p => p.id === viewInvoice.patient_id)?.phone && (
+                        <p><strong>Phone:</strong> {patients.find(p => p.id === viewInvoice.patient_id)?.phone}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <table style={{ width: '100%', color: '#333', marginBottom: '24px' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #333' }}>
+                        <th style={{ color: '#333', padding: '8px 0', background: 'none' }}>Medicine</th>
+                        <th style={{ color: '#333', padding: '8px 0', textAlign: 'right', background: 'none' }}>Qty</th>
+                        <th style={{ color: '#333', padding: '8px 0', textAlign: 'right', background: 'none' }}>Price</th>
+                        <th style={{ color: '#333', padding: '8px 0', textAlign: 'right', background: 'none' }}>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewInvoice.items.map(item => (
+                        <tr key={item.id} style={{ borderBottom: '1px solid #eee' }}>
+                          <td style={{ padding: '8px 0' }}>{item.medicine_name}</td>
+                          <td style={{ padding: '8px 0', textAlign: 'right' }}>{item.quantity}</td>
+                          <td style={{ padding: '8px 0', textAlign: 'right' }}>₹{item.unit_price.toFixed(2)}</td>
+                          <td style={{ padding: '8px 0', textAlign: 'right' }}>₹{item.total_price.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end', fontSize: '0.95rem', color: '#333', borderTop: '1px solid #ddd', paddingTop: '16px' }}>
+                    <div style={{ display: 'flex', width: '220px', justifyContent: 'space-between' }}>
+                      <span>Subtotal:</span>
+                      <span>₹{viewInvoice.subtotal.toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: 'flex', width: '220px', justifyContent: 'space-between', color: '#c00' }}>
+                      <span>Discount ({viewInvoice.discount}%):</span>
+                      <span>-₹{((viewInvoice.discount / 100) * viewInvoice.subtotal).toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: 'flex', width: '220px', justifyContent: 'space-between' }}>
+                      <span>GST ({viewInvoice.gst}%):</span>
+                      <span>₹{viewInvoice.gst.toFixed(2)}%</span>
+                    </div>
+                    <div style={{ display: 'flex', width: '220px', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '1.1rem', borderTop: '2px double #333', paddingTop: '8px', marginTop: '8px' }}>
+                      <span>Grand Total:</span>
+                      <span>₹{viewInvoice.total.toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  <div style={{ textAlign: 'center', marginTop: '40px', borderTop: '1px solid #eee', paddingTop: '16px', color: '#888', fontSize: '0.8rem' }}>
+                    Thank you for your visit. Get well soon!
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'ip_admissions' && (
+          <div>
+            <div className="header no-print">
+              <div className="header-title">
+                <h1>IP Admissions</h1>
+                <p>Manage Inpatient Admissions</p>
+              </div>
+            </div>
+
+            <div className="grid-2">
+              <div className="glass-card">
+                <h3>Admit Patient</h3>
+                <form onSubmit={handleAdmitPatient}>
+                  <div className="form-group">
+                    <label>Select Patient</label>
+                    <Select 
+                      styles={selectStyles}
+                      options={patients.map(p => ({ value: String(p.id), label: `${p.name} (ID: ${p.id})` }))}
+                      value={ipAdmissionForm.patient_id ? { value: String(ipAdmissionForm.patient_id), label: patients.find(p => String(p.id) === String(ipAdmissionForm.patient_id))?.name + ' (ID: ' + ipAdmissionForm.patient_id + ')' } : null}
+                      onChange={(sel: any) => setIpAdmissionForm({...ipAdmissionForm, patient_id: sel ? sel.value : ''})}
+                      placeholder="Select Patient"
+                      isClearable
+                    />
+                  </div>
+                  <div className="ward-selection">
+                    <label>Select Ward & Bed</label>
+                    <div className="ward-tabs">
+                      {HOSPITAL_LAYOUT.map(layout => (
+                        <div 
+                          key={layout.prefix} 
+                          className={`ward-tab ${selectedWardTab === layout.prefix ? 'active' : ''}`}
+                          onClick={() => {
+                            setSelectedWardTab(layout.prefix);
+                            setIpAdmissionForm({...ipAdmissionForm, ward_number: layout.name, room_number: ''});
+                          }}
+                        >
+                          {layout.name}
+                        </div>
+                      ))}
+                    </div>
+                    
+                    <div className="bus-layout-wrapper">
+                      <div className="nurse-station-front">
+                        <span>⚕️ Nurse Station</span>
+                      </div>
+                      <div className="bus-beds-container">
+                        {Array.from({ length: Math.ceil((HOSPITAL_LAYOUT.find(l => l.prefix === selectedWardTab)?.beds || 0) / 2) }).map((_, rowIndex) => {
+                          const leftBedIndex = rowIndex * 2;
+                          const rightBedIndex = rowIndex * 2 + 1;
+                          const totalBeds = HOSPITAL_LAYOUT.find(l => l.prefix === selectedWardTab)?.beds || 0;
+                          
+                          const renderBed = (bedIndex: number) => {
+                            if (bedIndex >= totalBeds) return <div className="bus-bed-item-empty"></div>;
+                            const bedId = `${selectedWardTab}-${bedIndex + 1}`;
+                            const isOccupied = ipAdmissions.some(a => a.room_number === bedId && a.status === 'Admitted');
+                            const isSelected = ipAdmissionForm.room_number === bedId;
+                            
+                            return (
+                              <div 
+                                key={bedId} 
+                                className={`bus-bed-item ${isOccupied ? 'occupied' : isSelected ? 'selected' : 'available'}`}
+                                onClick={() => {
+                                  if (!isOccupied) {
+                                    setIpAdmissionForm({...ipAdmissionForm, room_number: bedId});
+                                  }
+                                }}
+                              >
+                                <Bed size={24} />
+                                <span className="bed-number">{bedId}</span>
+                              </div>
+                            );
+                          };
+
+                          return (
+                            <div className="bus-row" key={`row-${rowIndex}`}>
+                              <div className="bus-seat-group left">
+                                {renderBed(leftBedIndex)}
+                              </div>
+                              <div className="bus-aisle">
+                                <div className="aisle-dots"></div>
+                              </div>
+                              <div className="bus-seat-group right">
+                                {renderBed(rightBedIndex)}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="bus-layout-legend">
+                        <div className="legend-item"><span className="legend-color available"></span> Available</div>
+                        <div className="legend-item"><span className="legend-color occupied"></span> Occupied</div>
+                        <div className="legend-item"><span className="legend-color selected"></span> Selected</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label>Doctor in Charge</label>
+                    <input type="text" value={ipAdmissionForm.doctor_in_charge} onChange={e => setIpAdmissionForm({...ipAdmissionForm, doctor_in_charge: e.target.value})} />
+                  </div>
+                  <div className="form-group">
+                    <label>Reason for Admission</label>
+                    <textarea value={ipAdmissionForm.reason_for_admission} onChange={e => setIpAdmissionForm({...ipAdmissionForm, reason_for_admission: e.target.value})} rows={3}></textarea>
+                  </div>
+                  <button type="submit" className="btn btn-primary"><Plus size={18} /> Admit Patient</button>
+                </form>
+              </div>
+
+              <div className="glass-card">
+                <h3>Current Admissions</h3>
+                <div className="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Patient ID</th>
+                        <th>Ward/Room</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ipAdmissions.map(adm => (
+                        <tr key={adm.id}>
+                          <td>{new Date(adm.admission_date).toLocaleDateString()}</td>
+                          <td>#{adm.patient_id}</td>
+                          <td>{adm.ward_number} / {adm.room_number}</td>
+                          <td><span className="status-badge" style={{backgroundColor: adm.status === 'Admitted' ? '#e0f2fe' : '#d1fae5', color: adm.status === 'Admitted' ? '#0369a1' : '#065f46'}}>{adm.status}</span></td>
+                          <td>
+                            <div style={{display:'flex', gap:'5px'}}>
+                              <button className="btn btn-primary" style={{padding:'4px 8px', fontSize:'12px'}} onClick={async () => {
+                                setActiveTab('reports');
+                                setReportType('patient');
+                                setPatientReportId(String(adm.patient_id));
+                                try {
+                                  const res = await axios.get(`${API_BASE}/reports/patient/${adm.patient_id}`);
+                                  setPatientReportData(res.data);
+                                } catch(e) {}
+                              }}>View Details</button>
+                              <button className="btn btn-secondary" style={{padding:'4px 8px', fontSize:'12px'}} onClick={() => {
+                                setBillingPatientType('registered');
+                                setBillingPatientId(adm.patient_id);
+                                setActiveTab('pharmacy');
+                              }}>Pharmacy</button>
+                              <button className="btn btn-secondary" style={{padding:'4px 8px', fontSize:'12px'}} onClick={() => {
+                                setIpBillForm({...ipBillForm, patient_id: String(adm.patient_id), admission_id: String(adm.id)});
+                                setBillingTab('ip');
+                                setActiveTab('billing');
+                              }}>IP Bill</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {ipAdmissions.length === 0 && (
+                        <tr><td colSpan={5} style={{textAlign: 'center', color: '#666'}}>No IP Admissions found.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'lab_dashboard' && (
+          <div className="no-print">
+            <div className="header">
+              <div className="header-title">
+                <h1>Laboratory Dashboard</h1>
+                <p>Overview of lab operations and pending tests.</p>
+              </div>
+            </div>
+            <div className="dashboard-grid">
+              <div className="stat-card">
+                <div className="stat-icon" style={{background: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6'}}><Activity size={24}/></div>
+                <div className="stat-details">
+                  <h3>Pending Tests</h3>
+                  <h2>{labOrders.filter(o => o.status === 'Pending' || o.status === 'Sample Collected').length}</h2>
+                </div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-icon" style={{background: 'rgba(16, 185, 129, 0.1)', color: '#10b981'}}><CheckCircle2 size={24}/></div>
+                <div className="stat-details">
+                  <h3>Completed Today</h3>
+                  <h2>{labOrders.filter(o => o.status === 'Verified' && new Date(o.order_date).toDateString() === new Date().toDateString()).length}</h2>
+                </div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-icon" style={{background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444'}}><AlertTriangle size={24}/></div>
+                <div className="stat-details">
+                  <h3>Rejected Samples</h3>
+                  <h2>{labSamples.filter(s => s.status === 'Rejected').length}</h2>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'lab_master' && (
+          <div className="no-print">
+            <div className="header">
+              <div className="header-title">
+                <h1>Lab Test Master</h1>
+                <p>Manage all laboratory tests, reference ranges, and pricing.</p>
+              </div>
+              {selectedTestMasterId && (
+                <button className="btn btn-secondary" onClick={() => {
+                  setSelectedTestMasterId(null);
+                  setLabTestMasterForm({ test_code: '', test_name: '', category: 'Pathology', department: '', sample_type: 'Blood', unit: '', reference_range: '', normal_range_male: '', normal_range_female: '', normal_range_child: '', price: 0, tat_hours: 24, is_active: true });
+                }}>Cancel Edit</button>
+              )}
+            </div>
+            <div className="grid-2">
+              <div className="glass-card">
+                <h3>{selectedTestMasterId ? 'Edit Test' : 'Add New Test'}</h3>
+                <form onSubmit={handleSaveLabTestMaster}>
+                  <div className="form-grid">
+                    <div className="form-group"><label>Test Code</label><input type="text" required value={labTestMasterForm.test_code} onChange={e => setLabTestMasterForm({...labTestMasterForm, test_code: e.target.value})} /></div>
+                    <div className="form-group"><label>Test Name</label><input type="text" required value={labTestMasterForm.test_name} onChange={e => setLabTestMasterForm({...labTestMasterForm, test_name: e.target.value})} /></div>
+                    <div className="form-group"><label>Category</label><select value={labTestMasterForm.category} onChange={e => setLabTestMasterForm({...labTestMasterForm, category: e.target.value})}><option>Pathology</option><option>Biochemistry</option><option>Microbiology</option><option>Radiology</option></select></div>
+                    <div className="form-group"><label>Department</label><input type="text" value={labTestMasterForm.department} onChange={e => setLabTestMasterForm({...labTestMasterForm, department: e.target.value})} /></div>
+                    <div className="form-group"><label>Sample Type</label><input type="text" value={labTestMasterForm.sample_type} onChange={e => setLabTestMasterForm({...labTestMasterForm, sample_type: e.target.value})} placeholder="Blood, Urine..." /></div>
+                    <div className="form-group"><label>Unit</label><input type="text" value={labTestMasterForm.unit} onChange={e => setLabTestMasterForm({...labTestMasterForm, unit: e.target.value})} placeholder="mg/dL" /></div>
+                    <div className="form-group"><label>Normal Range (Male)</label><input type="text" value={labTestMasterForm.normal_range_male} onChange={e => setLabTestMasterForm({...labTestMasterForm, normal_range_male: e.target.value})} /></div>
+                    <div className="form-group"><label>Normal Range (Female)</label><input type="text" value={labTestMasterForm.normal_range_female} onChange={e => setLabTestMasterForm({...labTestMasterForm, normal_range_female: e.target.value})} /></div>
+                    <div className="form-group"><label>Price (₹)</label><input type="number" required value={labTestMasterForm.price} onChange={e => setLabTestMasterForm({...labTestMasterForm, price: Number(e.target.value)})} /></div>
+                    <div className="form-group"><label>TAT (Hours)</label><input type="number" value={labTestMasterForm.tat_hours} onChange={e => setLabTestMasterForm({...labTestMasterForm, tat_hours: Number(e.target.value)})} /></div>
+                  </div>
+                  <button type="submit" className="btn btn-primary" style={{marginTop: '15px'}}>
+                    {selectedTestMasterId ? <><Edit size={18} /> Update Test</> : <><PlusCircle size={18} /> Save Test</>}
+                  </button>
+                </form>
+              </div>
+              <div className="glass-card">
+                <h3>Available Tests</h3>
+                <div className="table-container">
+                  <table>
+                    <thead><tr><th>Code</th><th>Name</th><th>Category</th><th>Price</th><th>Actions</th></tr></thead>
+                    <tbody>
+                      {labTestMasters.map(t => (
+                        <tr key={t.id}>
+                          <td>{t.test_code}</td>
+                          <td>{t.test_name}</td>
+                          <td>{t.category}</td>
+                          <td>₹{t.price}</td>
+                          <td>
+                            <div style={{ display: 'flex', gap: '5px' }}>
+                              <button className="btn btn-secondary" style={{padding: '4px 8px'}} onClick={() => handleEditLabTestMaster(t)}><Edit size={14}/></button>
+                              <button className="btn btn-danger" style={{padding: '4px 8px'}} onClick={() => handleDeleteLabTestMaster(t.id)}><Trash2 size={14}/></button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {labTestMasters.length === 0 && <tr><td colSpan={5} style={{textAlign: 'center', color: 'var(--text-muted)'}}>No lab tests configured.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'lab_orders' && (
+          <div className="no-print">
+            <LabPatientHeader 
+              patients={patients} 
+              selectedId={selectedGlobalLabPatientId} 
+              onChange={setSelectedGlobalLabPatientId} 
+              labOrders={labOrders} 
+              ipAdmissions={ipAdmissions} 
+            />
+
+            <div className="header">
+              <div className="header-title"><h1>Lab Orders Workflow</h1><p>Process test orders from doctors.</p></div>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button className="btn btn-primary" onClick={() => setIsLabRegistrationModalOpen(true)} style={{ background: 'linear-gradient(135deg, #10b981, #059669)', border: 'none', padding: '10px 20px', borderRadius: '8px', color: 'white', fontWeight: 'bold' }}>+ Register Walk-in</button>
+                <input 
+                  type="text" 
+                  className="search-bar" 
+                  placeholder="Search Patient Name or ID..." 
+                  value={labSearchQuery} 
+                  onChange={e => setLabSearchQuery(e.target.value)} 
+                />
+                <select className="search-bar" value={labFilterStatus} onChange={e => setLabFilterStatus(e.target.value)}>
+                  <option value="All">All Statuses</option>
+                  <option value="Pending">Pending</option>
+                  <option value="Sample Collected">Sample Collected</option>
+                  <option value="Testing">Testing</option>
+                  <option value="Verified">Verified</option>
+                </select>
+              </div>
+            </div>
+            
+            <div className="glass-card">
+              <div className="table-container">
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ minWidth: '1200px' }}>
+                    <thead>
+                      <tr>
+                        <th>Order ID</th>
+                        <th>Patient ID</th>
+                        <th>Patient Name</th>
+                        <th>Age/Gen</th>
+                        <th>Mobile</th>
+                        <th>Doctor</th>
+                        <th>Dept</th>
+                        <th>Visit</th>
+                        <th>Test</th>
+                        <th>Priority</th>
+                        <th>Billing</th>
+                        <th>Payment</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {labOrders
+                        .filter(o => {
+                           if (selectedGlobalLabPatientId && o.patient_id !== selectedGlobalLabPatientId) return false;
+                           const p = patients.find(pat => pat.id === o.patient_id);
+                           const pName = p?.name?.toLowerCase() || '';
+                           const doctorName = o.doctor_name?.toLowerCase() || '';
+                           const testName = labTestMasters.find(t => t.id === o.test_id)?.test_name?.toLowerCase() || '';
+                           const query = labSearchQuery.toLowerCase();
+                           
+                           if (labSearchQuery && !pName.includes(query) && !doctorName.includes(query) && !testName.includes(query) && o.id.toString() !== query && o.patient_id.toString() !== query) return false;
+                           if (labFilterStatus !== 'All' && o.status !== labFilterStatus) return false;
+                           return true;
+                        })
+                        .map(o => {
+                          const p = patients.find(pat => pat.id === o.patient_id);
+                          const t = labTestMasters.find(test => test.id === o.test_id);
+                          const isIP = ipAdmissions.some(a => a.patient_id === o.patient_id && a.status === 'Admitted');
+                          const visitType = isIP ? 'IP' : 'OP';
+                          
+                          // Basic billing logic for lab orders based on bills
+                          const pOpBills = opBills.filter(b => b.patient_id === o.patient_id);
+                          const isBilled = pOpBills.length > 0;
+                          const paymentStatus = isBilled ? 'Paid' : 'Pending';
+
+                          return (
+                          <tr key={o.id}>
+                            <td>#{o.id}</td>
+                            <td>{o.patient_id}</td>
+                            <td>{p?.name}</td>
+                            <td>{p?.age} / {p?.gender?.charAt(0)}</td>
+                            <td>{p?.phone}</td>
+                            <td>{o.doctor_name || 'N/A'}</td>
+                            <td>{t?.department || 'N/A'}</td>
+                            <td>{visitType}</td>
+                            <td>{t?.test_name}</td>
+                            <td>
+                              <span style={{color: o.priority === 'Urgent' ? 'var(--danger)' : 'inherit'}}>
+                                {o.priority || 'Routine'}
+                              </span>
+                            </td>
+                            <td>{isBilled ? 'Billed' : 'Unbilled'}</td>
+                            <td>{paymentStatus}</td>
+                            <td><span className={`status-badge ${(o.status || '').replace(' ', '-').toLowerCase()}`}>{o.status}</span></td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '5px' }}>
+                                <button className="btn btn-secondary" style={{padding: '5px 10px'}} onClick={() => setSelectedViewOrder(o)} title="View"><Eye size={16}/></button>
+                                {o.status === 'Pending' && (
+                                  <>
+                                    <button className="btn btn-secondary" style={{padding: '5px 10px'}} onClick={() => {
+                                      setEditOrderForm({ priority: o.priority || 'Routine', remarks: o.remarks || '' });
+                                      setSelectedEditOrder(o);
+                                    }} title="Edit"><Edit size={16}/></button>
+                                    <button className="btn btn-primary" style={{padding: '5px 10px', fontSize: '12px'}} onClick={() => {
+                                      setCollectSampleForm({ barcode: '', collected_by: currentUser?.username || '', sample_type: t?.sample_type || 'Unknown' });
+                                      setSelectedCollectSampleOrder(o);
+                                    }}>Collect</button>
+                                  </>
+                                )}
+                                {o.status === 'Sample Collected' && (
+                                  <button className="btn btn-primary" style={{padding: '5px 10px', fontSize: '12px'}} onClick={() => {
+                                    setResultEntryForm([{ parameter: '', result: '', unit: t?.unit || '', range: t?.reference_range || '', flag: 'Normal' }]);
+                                    setSelectedResultEntryOrder(o);
+                                  }}>Results</button>
+                                )}
+                                {o.status === 'Testing' && (
+                                  <button className="btn btn-primary" style={{padding: '5px 10px', fontSize: '12px'}} onClick={() => {
+                                    try {
+                                      const draft = JSON.parse(o.remarks || '[]');
+                                      if (draft && draft.length > 0 && draft[0].parameter !== undefined) {
+                                        setResultEntryForm(draft);
+                                      } else {
+                                        throw new Error("No valid draft");
+                                      }
+                                    } catch(e) {
+                                      setResultEntryForm([{ parameter: '', result: '', unit: t?.unit || '', range: t?.reference_range || '', flag: 'Normal' }]);
+                                    }
+                                    setSelectedResultEntryOrder(o);
+                                  }}>Verify</button>
+                                )}
+                                {o.status === 'Verified' && (
+                                  <button className="btn btn-secondary" style={{padding: '5px 10px'}} onClick={() => {
+                                    setActiveTab('lab_reports_new');
+                                  }} title="Print"><Printer size={16}/></button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )})}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+            
+            {/* VIEW MODAL */}
+            {selectedViewOrder && (
+              <div className="modal-overlay">
+                <div className="modal-content" style={{maxWidth: '600px'}}>
+                  <div className="modal-header">
+                    <h2>Order Details #{selectedViewOrder.id}</h2>
+                    <button className="close-btn" onClick={() => setSelectedViewOrder(null)}><X size={20}/></button>
+                  </div>
+                  <div className="modal-body">
+                    <p><strong>Patient:</strong> {patients.find(p=>p.id===selectedViewOrder.patient_id)?.name}</p>
+                    <p><strong>Doctor:</strong> {selectedViewOrder.doctor_name || 'N/A'}</p>
+                    <p><strong>Test:</strong> {labTestMasters.find(t=>t.id===selectedViewOrder.test_id)?.test_name}</p>
+                    <p><strong>Priority:</strong> {selectedViewOrder.priority || 'Routine'}</p>
+                    <p><strong>Remarks:</strong> {selectedViewOrder.remarks || 'None'}</p>
+                    <div style={{ marginTop: '20px', padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
+                      <h4>Timeline</h4>
+                      <p>➤ Pending ( {new Date(selectedViewOrder.order_date).toLocaleString()} )</p>
+                      {['Sample Collected', 'Testing', 'Completed', 'Verified'].includes(selectedViewOrder.status) && <p>➤ Sample Collected</p>}
+                      {['Testing', 'Completed', 'Verified'].includes(selectedViewOrder.status) && <p>➤ Result Entered</p>}
+                      {['Completed', 'Verified'].includes(selectedViewOrder.status) && <p>➤ Verified</p>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* EDIT MODAL */}
+            {selectedEditOrder && (
+              <div className="modal-overlay">
+                <div className="modal-content" style={{maxWidth: '400px'}}>
+                  <div className="modal-header">
+                    <h2>Edit Order #{selectedEditOrder.id}</h2>
+                    <button className="close-btn" onClick={() => setSelectedEditOrder(null)}><X size={20}/></button>
+                  </div>
+                  <div className="modal-body">
+                    <div className="form-group">
+                      <label>Priority</label>
+                      <select value={editOrderForm.priority} onChange={e => setEditOrderForm({...editOrderForm, priority: e.target.value})}>
+                        <option>Routine</option>
+                        <option>Urgent</option>
+                        <option>STAT</option>
+                      </select>
+                    </div>
+                    <div className="form-group" style={{marginTop: '15px'}}>
+                      <label>Remarks</label>
+                      <textarea rows={3} value={editOrderForm.remarks} onChange={e => setEditOrderForm({...editOrderForm, remarks: e.target.value})}></textarea>
+                    </div>
+                    <button className="btn btn-primary" style={{marginTop: '20px', width: '100%'}} onClick={handleSaveEditOrder}>Save Changes</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* COLLECT SAMPLE MODAL */}
+            {selectedCollectSampleOrder && (
+              <div className="modal-overlay">
+                <div className="modal-content" style={{maxWidth: '600px'}}>
+                  <div className="modal-header">
+                    <h2>Collect Sample for Order #{selectedCollectSampleOrder.id}</h2>
+                    <button className="close-btn" onClick={() => setSelectedCollectSampleOrder(null)}><X size={20}/></button>
+                  </div>
+                  <div className="modal-body">
+                    <div className="form-grid">
+                      <div className="form-group">
+                        <label>Sample Type</label>
+                        <input type="text" value={collectSampleForm.sample_type} onChange={e => setCollectSampleForm({...collectSampleForm, sample_type: e.target.value})} />
+                      </div>
+                      <div className="form-group">
+                        <label>Container Type</label>
+                        <input type="text" placeholder="e.g. EDTA Tube, Plain Vial" value={collectSampleForm.container_type} onChange={e => setCollectSampleForm({...collectSampleForm, container_type: e.target.value})} />
+                      </div>
+                      <div className="form-group">
+                        <label>Barcode</label>
+                        <input type="text" placeholder="Scan or enter barcode" value={collectSampleForm.barcode} onChange={e => setCollectSampleForm({...collectSampleForm, barcode: e.target.value})} />
+                      </div>
+                      <div className="form-group">
+                        <label>Collected By</label>
+                        <input type="text" value={collectSampleForm.collected_by} onChange={e => setCollectSampleForm({...collectSampleForm, collected_by: e.target.value})} />
+                      </div>
+                      <div className="form-group" style={{gridColumn: '1 / -1'}}>
+                        <label>Remarks / Instructions</label>
+                        <textarea rows={2} style={{width: '100%'}} value={collectSampleForm.remarks} onChange={e => setCollectSampleForm({...collectSampleForm, remarks: e.target.value})} />
+                      </div>
+                    </div>
+                    <button className="btn btn-primary" style={{marginTop: '20px', width: '100%'}} onClick={handleSaveCollectSample}>Save and Mark as Collected</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+
+            {/* LAB WALKIN REGISTRATION MODAL */}
+            {isLabRegistrationModalOpen && (
+              <div className="modal-overlay">
+                <div className="modal-content" style={{maxWidth: '800px', width: '90%'}}>
+                  <div className="modal-header">
+                    <h2>Register Walk-in Patient</h2>
+                    <button className="close-btn" onClick={() => setIsLabRegistrationModalOpen(false)}><X size={20}/></button>
+                  </div>
+                  <div className="modal-body">
+                    <form onSubmit={handleLabWalkinRegistration}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                        <div className="form-group">
+                          <label>Patient Full Name *</label>
+                          <input type="text" value={patientForm.name} onChange={e => setPatientForm({ ...patientForm, name: e.target.value })} required />
+                        </div>
+                        <div className="form-group">
+                          <label>Age *</label>
+                          <input type="number" value={patientForm.age || ''} onChange={e => setPatientForm({ ...patientForm, age: Number(e.target.value) })} required />
+                        </div>
+                        <div className="form-group">
+                          <label>Gender *</label>
+                          <select value={patientForm.gender} onChange={e => setPatientForm({ ...patientForm, gender: e.target.value })}>
+                            <option>Male</option>
+                            <option>Female</option>
+                            <option>Other</option>
+                          </select>
+                        </div>
+                        <div className="form-group">
+                          <label>Phone Number *</label>
+                          <input type="text" value={patientForm.phone} onChange={e => setPatientForm({ ...patientForm, phone: e.target.value })} required />
+                        </div>
+                        <div className="form-group">
+                          <label>Blood Group</label>
+                          <select value={patientForm.blood_group} onChange={e => setPatientForm({ ...patientForm, blood_group: e.target.value })}>
+                            <option>A+</option><option>A-</option><option>B+</option><option>B-</option>
+                            <option>AB+</option><option>AB-</option><option>O+</option><option>O-</option>
+                          </select>
+                        </div>
+                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                          <label>Address</label>
+                          <input type="text" value={patientForm.address} onChange={e => setPatientForm({ ...patientForm, address: e.target.value })} />
+                        </div>
+                        <div className="form-group" style={{ gridColumn: 'span 3', display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
+                          <button type="submit" className="btn btn-primary" style={{ padding: '10px 24px' }}>Register & Continue to Order</button>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* DIRECT LAB ORDER MODAL */}
+            {isLabOrderModalOpen && (
+              <div className="modal-overlay">
+                <div className="modal-content" style={{maxWidth: '600px'}}>
+                  <div className="modal-header">
+                    <h2>Direct Lab Order</h2>
+                    <button className="close-btn" onClick={() => { setIsLabOrderModalOpen(false); setLabDirectOrderPatientId(null); }}><X size={20}/></button>
+                  </div>
+                  <div className="modal-body">
+                    <div style={{ background: 'rgba(59, 130, 246, 0.1)', padding: '15px', borderRadius: '8px', marginBottom: '20px', borderLeft: '4px solid #3b82f6' }}>
+                      <p style={{ margin: 0, fontWeight: 'bold' }}>Patient ID: {labDirectOrderPatientId}</p>
+                      <p style={{ margin: '5px 0 0 0', color: '#94a3b8', fontSize: '14px' }}>Please select the test required for this walk-in patient.</p>
+                    </div>
+                    <form onSubmit={handleCreateDirectLabOrder}>
+                      <div className="form-group">
+                        <label>Select Test *</label>
+                        <select value={labDirectOrderForm.test_id} onChange={e => setLabDirectOrderForm({ ...labDirectOrderForm, test_id: e.target.value })} required>
+                          <option value="">-- Choose Test --</option>
+                          {labTestMasters.filter(t => t.is_active).map(t => (
+                            <option key={t.id} value={t.id}>{t.test_name} (Rs {t.price})</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label>Referring Doctor</label>
+                        <input type="text" value={labDirectOrderForm.referring_doctor} onChange={e => setLabDirectOrderForm({ ...labDirectOrderForm, referring_doctor: e.target.value })} />
+                        <small style={{color: '#64748b', display: 'block', marginTop: '4px'}}>Leave as 'Walk-in / Self' if self-referred.</small>
+                      </div>
+                      <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '20px' }}>Create Lab Order</button>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* RESULT ENTRY MODAL */}
+            {selectedResultEntryOrder && (
+              <div className="modal-overlay">
+                <div className="modal-content" style={{maxWidth: '900px', width: '95%'}}>
+                  <div className="modal-header">
+                    <h2>Enter Results for Order #{selectedResultEntryOrder.id}</h2>
+                    <button className="close-btn" onClick={() => setSelectedResultEntryOrder(null)}><X size={20}/></button>
+                  </div>
+                  <div className="modal-body">
+                    {/* Patient Context */}
+                    <div style={{ background: '#f8fafc', padding: '15px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #e2e8f0' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+                        <div><small>Patient Name</small><br/><b>{patients.find(p => p.id === selectedResultEntryOrder.patient_id)?.name}</b></div>
+                        <div><small>Test Name</small><br/><b>{labTestMasters.find(t => t.id === selectedResultEntryOrder.test_id)?.test_name}</b></div>
+                        <div><small>Doctor</small><br/><b>{selectedResultEntryOrder.doctor_name || 'Walk-in'}</b></div>
+                        <div><small>Status</small><br/><span className={`status-badge ${(selectedResultEntryOrder.status || '').replace(' ', '-').toLowerCase()}`}>{selectedResultEntryOrder.status}</span></div>
+                      </div>
+                    </div>
+                    
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{marginBottom: '20px', minWidth: '800px'}}>
+                        <thead><tr><th>Parameter</th><th>Result Value</th><th>Unit</th><th>Ref. Range</th><th>Normal Range</th><th>Flag</th><th>Remarks</th><th>Action</th></tr></thead>
+                        <tbody>
+                          {resultEntryForm.map((row, index) => (
+                            <tr key={index}>
+                              <td><input type="text" placeholder="e.g. WBC" value={row.parameter} onChange={e => { const newForm = [...resultEntryForm]; newForm[index].parameter = e.target.value; setResultEntryForm(newForm); }} disabled={selectedResultEntryOrder.status === 'Verified'} /></td>
+                              <td><input type="text" value={row.result} onChange={e => { const newForm = [...resultEntryForm]; newForm[index].result = e.target.value; setResultEntryForm(newForm); }} disabled={selectedResultEntryOrder.status === 'Verified'} /></td>
+                              <td><input type="text" value={row.unit} onChange={e => { const newForm = [...resultEntryForm]; newForm[index].unit = e.target.value; setResultEntryForm(newForm); }} disabled={selectedResultEntryOrder.status === 'Verified'} style={{width: '70px'}} /></td>
+                              <td><input type="text" value={row.range} onChange={e => { const newForm = [...resultEntryForm]; newForm[index].range = e.target.value; setResultEntryForm(newForm); }} disabled={selectedResultEntryOrder.status === 'Verified'} /></td>
+                              <td><input type="text" value={row.normal_range || ''} onChange={e => { const newForm = [...resultEntryForm]; newForm[index].normal_range = e.target.value; setResultEntryForm(newForm); }} disabled={selectedResultEntryOrder.status === 'Verified'} /></td>
+                              <td>
+                                <select value={row.flag} onChange={e => { const newForm = [...resultEntryForm]; newForm[index].flag = e.target.value; setResultEntryForm(newForm); }} disabled={selectedResultEntryOrder.status === 'Verified'}>
+                                  <option>Normal</option>
+                                  <option>High</option>
+                                  <option>Low</option>
+                                </select>
+                              </td>
+                              <td><input type="text" value={row.remarks || ''} onChange={e => { const newForm = [...resultEntryForm]; newForm[index].remarks = e.target.value; setResultEntryForm(newForm); }} disabled={selectedResultEntryOrder.status === 'Verified'} /></td>
+                              <td>
+                                {selectedResultEntryOrder.status !== 'Verified' && (
+                                  <button className="btn btn-danger" onClick={() => { const newForm = resultEntryForm.filter((_, i) => i !== index); setResultEntryForm(newForm); }}><Trash2 size={16}/></button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {selectedResultEntryOrder.status !== 'Verified' && (
+                      <button className="btn btn-secondary" onClick={() => setResultEntryForm([...resultEntryForm, { parameter: '', result: '', unit: '', range: '', normal_range: '', flag: 'Normal', remarks: '' }])}>+ Add Parameter</button>
+                    )}
+                    
+                    {selectedResultEntryOrder.status !== 'Verified' ? (
+                      <div style={{ display: 'flex', gap: '15px', marginTop: '30px' }}>
+                        <button className="btn btn-secondary" style={{flex: 1}} onClick={() => handleSaveResultEntry(false)}>Save Draft</button>
+                        <button className="btn btn-primary" style={{flex: 1}} onClick={() => handleSaveResultEntry(true)}>Verify & Complete</button>
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: '30px', padding: '15px', background: '#dcfce3', color: '#166534', borderRadius: '8px', textAlign: 'center', fontWeight: 'bold' }}>
+                        This report has been Verified and locked. Duplicate reports or edits are not allowed.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {activeTab === 'lab_samples' && (
+          <div className="no-print">
+            <LabPatientHeader 
+              patients={patients} 
+              selectedId={selectedGlobalLabPatientId} 
+              onChange={setSelectedGlobalLabPatientId} 
+              labOrders={labOrders} 
+              ipAdmissions={ipAdmissions} 
+            />
+
+            <div className="header">
+              <div className="header-title"><h1>Sample Collection</h1><p>Manage specimen collections.</p></div>
+            </div>
+            <div className="glass-card">
+              <div className="table-container">
+                <table>
+                  <thead><tr><th>Sample ID</th><th>Order ID</th><th>Sample Type</th><th>Status</th><th>Action</th></tr></thead>
+                  <tbody>
+                    {labSamples.map(s => (
+                      <tr key={s.id}>
+                        <td>#{s.id}</td><td>#{s.order_id}</td><td>{s.sample_type}</td>
+                        <td><span className={`status-badge ${(s.status || '').replace(' ', '-').toLowerCase()}`}>{s.status}</span></td>
+                        <td>
+                          {s.status === 'Pending' && (
+                            <button className="btn btn-primary" style={{padding: '5px 10px'}} onClick={() => handleUpdateLabSampleStatus(s.id, 'Collected')}>Mark Collected</button>
+                          )}
+                          {s.status === 'Collected' && (
+                            <button className="btn btn-danger" style={{padding: '5px 10px'}} onClick={() => handleUpdateLabSampleStatus(s.id, 'Rejected')}>Reject</button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'lab_results' && (
+          <div className="no-print">
+            <LabPatientHeader 
+              patients={patients} 
+              selectedId={selectedGlobalLabPatientId} 
+              onChange={setSelectedGlobalLabPatientId} 
+              labOrders={labOrders} 
+              ipAdmissions={ipAdmissions} 
+            />
+
+            <div className="header">
+              <div className="header-title"><h1>Result Entry</h1><p>Enter test results for collected samples.</p></div>
+            </div>
+            <div className="glass-card">
+              <div className="table-container">
+                <table>
+                  <thead><tr><th>Order ID</th><th>Patient</th><th>Test</th><th>Status</th><th>Action</th></tr></thead>
+                  <tbody>
+                    {labOrders.filter(o => o.status === 'Sample Collected').map(o => {
+                      const test = labTestMasters.find(t=>t.id===o.test_id);
+                      return (
+                      <tr key={o.id}>
+                        <td>#{o.id}</td><td>{patients.find(p=>p.id===o.patient_id)?.name}</td><td>{test?.test_name}</td>
+                        <td><span className="status-badge sample-collected">Ready for Entry</span></td>
+                        <td>
+                          <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
+                            <input type="text" placeholder="Value" className="input-field" onChange={(e) => setLabResultParams({ ...labResultParams, [o.id]: { ...labResultParams[o.id], value: e.target.value } })} />
+                            <select className="input-field" onChange={(e) => setLabResultParams({ ...labResultParams, [o.id]: { ...labResultParams[o.id], flag: e.target.value } })}>
+                              <option value="Normal">Normal</option>
+                              <option value="High">High</option>
+                              <option value="Low">Low</option>
+                            </select>
+                            <button className="btn btn-primary" style={{padding: '8px 12px'}} onClick={() => handleSaveNewLabReport(o)}>Verify & Save</button>
+                          </div>
+                        </td>
+                      </tr>
+                    )})}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'lab_reports_new' && (
+          <div>
+            <div className="header no-print">
+              <div className="header-title"><h1>Completed Lab Reports</h1><p>View and print finalized reports.</p></div>
+            </div>
+            <div className="glass-card">
+              <div className="table-container no-print">
+                <table>
+                  <thead><tr><th>Date</th><th>Patient</th><th>Test Name</th><th>Results</th><th>Action</th></tr></thead>
+                  <tbody>
+                    {labReports.map(report => (
+                      <tr key={report.id}>
+                        <td>{new Date(report.date_conducted).toLocaleDateString()}</td>
+                        <td>{patients.find(p=>p.id===report.patient_id)?.name}</td>
+                        <td>{report.test_name}</td>
+                        <td>
+                          {report.results_data ? (
+                            Object.keys(report.results_data).map(k => (
+                              <div key={k}>Value: {report.results_data[k]?.value} ({report.results_data[k]?.flag})</div>
+                            ))
+                          ) : (
+                            <div>{report.result_value} {report.units}</div>
+                          )}
+                        </td>
+                        <td>
+                          <button className="btn btn-secondary" onClick={() => window.print()}><Printer size={16}/> Print</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+        {activeTab === 'patient_history' && (
+          <div className="no-print">
+            <div className="header">
+              <div className="header-title">
+                <h1>Patient Search & History</h1>
+                <p>Search for patients and view their complete medical history, lab reports, and prescriptions.</p>
+              </div>
+            </div>
+
+            <div className="form-grid">
+              <div className="glass-card" style={{ gridColumn: 'span 2' }}>
+                <h3 style={{ marginBottom: '16px' }}>Patient Search</h3>
+                <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <input type="text" placeholder="Search by name, phone, or ID..." className="input-field" value={patientSearch} onChange={e => setPatientSearch(e.target.value)} />
+                </div>
+                <div className="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Patient ID</th>
+                        <th>Name</th>
+                        <th>Age/Gender</th>
+                        <th>Phone</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {patients.filter(p => p.name.toLowerCase().includes(patientSearch.toLowerCase()) || String(p.id).includes(patientSearch) || (p.phone && p.phone.includes(patientSearch))).slice(0, 10).map(p => (
+                        <tr key={p.id}>
+                          <td>#{p.id}</td>
+                          <td><strong>{p.name}</strong></td>
+                          <td>{p.age} / {p.gender}</td>
+                          <td>{p.phone || 'N/A'}</td>
+                          <td>
+                            <div style={{display:'flex', gap:'5px'}}>
+                              <button className="btn btn-primary" style={{ padding: '4px 8px', fontSize: '12px' }}>View History</button>
+                              <button className="btn btn-danger" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => handleDeletePatient(p.id)}><Trash2 size={12}/> Delete</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {currentUser?.role === 'Admin' && activeTab === 'users' && (
+          <div>
+            <div className="header no-print">
+              <div className="header-title">
+                <h1>User Management</h1>
+                <p>Create, manage, and assign roles to users</p>
+              </div>
+            </div>
+
+            <div className="grid grid-2">
+              <div className="glass-card">
+                <h3>Create New User</h3>
+                <form className="form-container" onSubmit={handleCreateUser}>
+                  <div className="form-group">
+                    <label>Username</label>
+                    <input type="text" value={userForm.username} onChange={e => setUserForm({...userForm, username: e.target.value})} required />
+                  </div>
+                  <div className="form-group">
+                    <label>Password</label>
+                    <input type="password" value={userForm.password} onChange={e => setUserForm({...userForm, password: e.target.value})} required />
+                  </div>
+                  <div className="form-group">
+                    <label>Role</label>
+                    <select value={userForm.role} onChange={e => setUserForm({...userForm, role: e.target.value})}>
+                      <option value="Admin">Admin</option>
+                      <option value="Doctor">Doctor</option>
+                      <option value="Receptionist">Receptionist</option>
+                      <option value="Pharmacy">Pharmacy</option>
+                      <option value="Laboratory">Laboratory</option>
+                    </select>
+                  </div>
+                  <button type="submit" className="btn btn-primary"><Plus size={18} /> Create User</button>
+                </form>
+              </div>
+
+              <div className="glass-card">
+                <h3>System Users</h3>
+                <div className="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Username</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {users.map(u => (
+                        <tr key={u.id}>
+                          <td>{u.username}</td>
+                          <td><span className="badge" style={{background: u.role === 'Admin' ? '#dbeafe' : '#f3f4f6', color: u.role === 'Admin' ? '#1d4ed8' : '#374151'}}>{u.role}</span></td>
+                          <td>{u.is_active ? 'Active' : 'Inactive'}</td>
+                          <td>
+                            {currentUser.id !== u.id && (
+                              <button className="btn btn-danger" onClick={() => handleDeleteUser(u.id)} style={{padding: '4px 8px', fontSize: '12px'}}>
+                                <Trash2 size={14} /> Delete
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================================== */}
+        {/* BILLING MODULE */}
+        {/* =========================================================== */}
+        {activeTab === 'billing' && (
+          <div>
+            <div className="header no-print">
+              <div className="header-title">
+                <h1>Billing Module</h1>
+                <p>OP Billing, IP Billing, Payment & GST Invoice</p>
+              </div>
+            </div>
+
+            {/* Billing Sub-Tabs */}
+            <div className="sub-tabs no-print" style={{display:'flex', gap:'8px', padding:'0 24px 16px', flexWrap:'wrap'}}>
+              {[{key:'op', label:'OP Billing', icon:'🏥'}, {key:'ip', label:'IP Billing', icon:'🛏️'}, {key:'op_history', label:'OP Bill History', icon:'📋'}, {key:'ip_history', label:'IP Bill History', icon:'📋'}].map(tab => (
+                <button key={tab.key} onClick={() => setBillingTab(tab.key)}
+                  style={{padding:'8px 18px', borderRadius:'20px', border:'none', cursor:'pointer', fontWeight:600, fontSize:'13px',
+                    background: billingTab === tab.key ? 'linear-gradient(135deg, #3b82f6, #2563eb)' : 'rgba(255,255,255,0.07)',
+                    color: billingTab === tab.key ? '#fff' : '#94a3b8', transition:'all 0.3s'}}>
+                  {tab.icon} {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* OP BILLING FORM */}
+            {billingTab === 'op' && (
+              <div className="form-grid">
+                <div className="glass-card">
+                  <h3 style={{marginBottom:'20px', display:'flex', alignItems:'center', gap:'8px'}}><Receipt size={20} color="#3b82f6" /> OP Bill Creation</h3>
+                  <form onSubmit={handleCreateOPBill}>
+                    <div className="form-grid" style={{gridTemplateColumns:'1fr 1fr', gap:'12px'}}>
+                      <div className="form-group">
+                        <label>Patient *</label>
+                        <Select 
+                          styles={selectStyles}
+                          options={patients.map(p => ({ value: String(p.id), label: `${p.name} (ID: ${p.id})` }))}
+                          value={opBillForm.patient_id ? { value: String(opBillForm.patient_id), label: patients.find(p => String(p.id) === String(opBillForm.patient_id))?.name + ' (ID: ' + opBillForm.patient_id + ')' } : null}
+                          onChange={(sel: any) => setOpBillForm({...opBillForm, patient_id: sel ? sel.value : ''})}
+                          placeholder="Select Patient"
+                          isClearable
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>OP Token (Optional)</label>
+                        <select value={opBillForm.token_id} onChange={e => setOpBillForm({...opBillForm, token_id: e.target.value})}>
+                          <option value="">Select Token</option>
+                          {tokens.filter(t => !opBillForm.patient_id || t.patient_id === Number(opBillForm.patient_id)).map(t => <option key={t.id} value={t.id}>Token #{t.token_number} | {t.date}</option>)}
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label>Doctor Name</label>
+                        <input type="text" value={opBillForm.doctor_name} onChange={e => setOpBillForm({...opBillForm, doctor_name: e.target.value})} placeholder="Dr. Name" />
+                      </div>
+                      <div className="form-group">
+                        <label>Department</label>
+                        <input type="text" value={opBillForm.department} onChange={e => setOpBillForm({...opBillForm, department: e.target.value})} placeholder="e.g. Cardiology" />
+                      </div>
+                    </div>
+
+                    <h4 style={{margin:'16px 0 12px', color:'#94a3b8'}}>Charge Breakdown</h4>
+                    <div className="form-grid" style={{gridTemplateColumns:'1fr 1fr 1fr', gap:'12px'}}>
+                      <div className="form-group">
+                        <label>Consultation Fee (₹)</label>
+                        <input type="number" min="0" step="0.01" value={opBillForm.consultation_fee} onChange={e => setOpBillForm({...opBillForm, consultation_fee: parseFloat(e.target.value)||0})} />
+                      </div>
+                      <div className="form-group">
+                        <label>Lab Charges (₹)</label>
+                        <input type="number" min="0" step="0.01" value={opBillForm.lab_charges} onChange={e => setOpBillForm({...opBillForm, lab_charges: parseFloat(e.target.value)||0})} />
+                      </div>
+                      <div className="form-group">
+                        <label>Pharmacy Charges (₹)</label>
+                        <input type="number" min="0" step="0.01" value={opBillForm.pharmacy_charges} onChange={e => setOpBillForm({...opBillForm, pharmacy_charges: parseFloat(e.target.value)||0})} />
+                      </div>
+                    </div>
+
+                    {/* Other Charges */}
+                    <div style={{marginBottom:'16px'}}>
+                      <label style={{display:'block', marginBottom:'8px', fontSize:'13px', color:'#94a3b8'}}>Other Charges</label>
+                      {opOtherCharges.map((c, i) => (
+                        <div key={i} style={{display:'flex', gap:'8px', alignItems:'center', marginBottom:'6px'}}>
+                          <span style={{flex:1, padding:'6px 10px', background:'rgba(255,255,255,0.05)', borderRadius:'6px', fontSize:'13px'}}>{c.name}: ₹{c.amount}</span>
+                          <button type="button" onClick={() => setOpOtherCharges(opOtherCharges.filter((_,j) => j!==i))} style={{background:'#ef4444', border:'none', color:'#fff', borderRadius:'6px', padding:'4px 10px', cursor:'pointer'}}>×</button>
+                        </div>
+                      ))}
+                      <div style={{display:'flex', gap:'8px', marginTop:'8px'}}>
+                        <input id="op-other-name" type="text" placeholder="Charge name" style={{flex:2, padding:'8px', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:'6px', color:'#fff'}} />
+                        <input id="op-other-amt" type="number" placeholder="Amount" style={{flex:1, padding:'8px', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:'6px', color:'#fff'}} />
+                        <button type="button" className="btn btn-primary" style={{padding:'8px 14px'}} onClick={() => {
+                          const n = (document.getElementById('op-other-name') as HTMLInputElement)?.value;
+                          const a = parseFloat((document.getElementById('op-other-amt') as HTMLInputElement)?.value||'0');
+                          if (n && a>0) { setOpOtherCharges([...opOtherCharges, {name:n, amount:a}]); (document.getElementById('op-other-name') as HTMLInputElement).value=''; (document.getElementById('op-other-amt') as HTMLInputElement).value=''; }
+                        }}>+ Add</button>
+                      </div>
+                    </div>
+
+                    <div className="form-grid" style={{gridTemplateColumns:'1fr 1fr 1fr', gap:'12px'}}>
+                      <div className="form-group">
+                        <label>Discount (%)</label>
+                        <input type="number" min="0" max="100" value={opBillForm.discount} onChange={e => setOpBillForm({...opBillForm, discount: parseFloat(e.target.value)||0})} />
+                      </div>
+                      <div className="form-group">
+                        <label>GST (%)</label>
+                        <input type="number" min="0" max="28" value={opBillForm.gst} onChange={e => setOpBillForm({...opBillForm, gst: parseFloat(e.target.value)||0})} />
+                      </div>
+                      <div className="form-group">
+                        <label>Payment Mode</label>
+                        <select value={opBillForm.payment_mode} onChange={e => setOpBillForm({...opBillForm, payment_mode: e.target.value})}>
+                          <option>Cash</option><option>UPI</option><option>Card</option><option>Bank Transfer</option><option>Split</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {opBillForm.payment_mode === 'Split' && (
+                      <div className="glass-card" style={{background:'rgba(59,130,246,0.08)', border:'1px solid rgba(59,130,246,0.3)', marginBottom:'16px'}}>
+                        <h4 style={{marginBottom:'12px', color:'#60a5fa'}}>Split Payment Breakdown</h4>
+                        <div className="form-grid" style={{gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'10px'}}>
+                          {(['cash','upi','card','bank'] as const).map(mode => (
+                            <div key={mode} className="form-group">
+                              <label style={{textTransform:'capitalize'}}>{mode} (₹)</label>
+                              <input type="number" min="0" value={opSplitPayment[mode]} onChange={e => setOpSplitPayment({...opSplitPayment, [mode]: parseFloat(e.target.value)||0})} />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="form-group">
+                      <label>Notes</label>
+                      <textarea value={opBillForm.notes} onChange={e => setOpBillForm({...opBillForm, notes: e.target.value})} rows={2} placeholder="Additional notes..." />
+                    </div>
+
+                    {/* Bill Summary */}
+                    <div style={{background:'rgba(59,130,246,0.1)', border:'1px solid rgba(59,130,246,0.3)', borderRadius:'12px', padding:'16px', marginBottom:'16px'}}>
+                      <div style={{display:'flex', justifyContent:'space-between', marginBottom:'6px', fontSize:'14px'}}><span style={{color:'#94a3b8'}}>Subtotal</span><span>₹{opSubtotal.toFixed(2)}</span></div>
+                      <div style={{display:'flex', justifyContent:'space-between', marginBottom:'6px', fontSize:'14px'}}><span style={{color:'#94a3b8'}}>Discount ({opBillForm.discount}%)</span><span style={{color:'#ef4444'}}>-₹{opDiscountAmt.toFixed(2)}</span></div>
+                      <div style={{display:'flex', justifyContent:'space-between', marginBottom:'12px', fontSize:'14px'}}><span style={{color:'#94a3b8'}}>GST ({opBillForm.gst}%)</span><span style={{color:'#10b981'}}>+₹{opGstAmt.toFixed(2)}</span></div>
+                      <div style={{display:'flex', justifyContent:'space-between', fontSize:'20px', fontWeight:'700', color:'#3b82f6', borderTop:'1px solid rgba(59,130,246,0.3)', paddingTop:'10px'}}><span>Total</span><span>₹{opTotal.toFixed(2)}</span></div>
+                    </div>
+
+                    <button type="submit" className="btn btn-primary" style={{width:'100%', padding:'14px', fontSize:'16px'}}>
+                      <Receipt size={18} style={{marginRight:'8px', verticalAlign:'middle'}} /> Generate OP Bill & GST Invoice
+                    </button>
+                  </form>
+                </div>
+
+                {/* Invoice Preview */}
+                {viewBillDetail && viewBillDetail.bill_type === 'op' && (
+                  <div className="glass-card">
+                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px'}}>
+                      <h3>✅ OP Bill #{viewBillDetail.id} Created</h3>
+                      <button className="btn btn-primary" onClick={() => printInvoice(viewBillDetail, 'op')}><Printer size={16} style={{marginRight:'6px'}} />Print GST Invoice</button>
+                    </div>
+                    <p style={{color:'#10b981', marginBottom:'12px'}}>Patient: {patients.find(p=>p.id===viewBillDetail.patient_id)?.name}</p>
+                    <div style={{display:'flex', justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid rgba(255,255,255,0.1)'}}><span style={{color:'#94a3b8'}}>Total Amount</span><span style={{fontSize:'24px', fontWeight:'700', color:'#3b82f6'}}>₹{viewBillDetail.total?.toFixed(2)}</span></div>
+                    <div style={{display:'flex', justifyContent:'space-between', padding:'10px 0'}}><span style={{color:'#94a3b8'}}>Payment Mode</span><span style={{padding:'4px 12px', background:'rgba(16,185,129,0.2)', color:'#10b981', borderRadius:'20px', fontSize:'12px', fontWeight:'600'}}>{viewBillDetail.payment_mode}</span></div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* IP BILLING FORM */}
+            {billingTab === 'ip' && (
+              <div className="form-grid">
+                <div className="glass-card">
+                  <h3 style={{marginBottom:'20px', display:'flex', alignItems:'center', gap:'8px'}}><Building2 size={20} color="#8b5cf6" /> IP Bill Creation</h3>
+                  <form onSubmit={handleCreateIPBill}>
+                    <div className="form-grid" style={{gridTemplateColumns:'1fr 1fr', gap:'12px'}}>
+                      <div className="form-group">
+                        <label>Patient *</label>
+                        <Select 
+                          styles={selectStyles}
+                          options={patients.map(p => ({ value: String(p.id), label: `${p.name} (ID: ${p.id})` }))}
+                          value={ipBillForm.patient_id ? { value: String(ipBillForm.patient_id), label: patients.find(p => String(p.id) === String(ipBillForm.patient_id))?.name + ' (ID: ' + ipBillForm.patient_id + ')' } : null}
+                          onChange={(sel: any) => setIpBillForm({...ipBillForm, patient_id: sel ? sel.value : ''})}
+                          placeholder="Select Patient"
+                          isClearable
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Admission (Optional)</label>
+                        <select value={ipBillForm.admission_id} onChange={e => setIpBillForm({...ipBillForm, admission_id: e.target.value})}>
+                          <option value="">Select Admission</option>
+                          {ipAdmissions.filter(a => !ipBillForm.patient_id || a.patient_id === Number(ipBillForm.patient_id)).map(a => <option key={a.id} value={a.id}>#{a.id} | {a.ward_number} | {a.room_number} | {a.status}</option>)}
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label>Doctor Name</label>
+                        <input type="text" value={ipBillForm.doctor_name} onChange={e => setIpBillForm({...ipBillForm, doctor_name: e.target.value})} placeholder="Dr. Name" />
+                      </div>
+                      <div className="form-group"></div>
+                    </div>
+
+                    <h4 style={{margin:'16px 0 12px', color:'#94a3b8'}}>Room Charges</h4>
+                    <div className="form-grid" style={{gridTemplateColumns:'1fr 1fr', gap:'12px'}}>
+                      <div className="form-group">
+                        <label>Room Charge per Day (₹)</label>
+                        <input type="number" min="0" value={ipBillForm.room_charge_per_day} onChange={e => setIpBillForm({...ipBillForm, room_charge_per_day: parseFloat(e.target.value)||0})} />
+                      </div>
+                      <div className="form-group">
+                        <label>Days Stayed</label>
+                        <input type="number" min="1" value={ipBillForm.days_stayed} onChange={e => setIpBillForm({...ipBillForm, days_stayed: parseInt(e.target.value)||1})} />
+                      </div>
+                    </div>
+                    <div style={{padding:'10px 14px', background:'rgba(139,92,246,0.1)', border:'1px solid rgba(139,92,246,0.3)', borderRadius:'8px', marginBottom:'16px', fontSize:'14px'}}>
+                      Room Charges: ₹{ipBillForm.room_charge_per_day} × {ipBillForm.days_stayed} days = <strong style={{color:'#8b5cf6'}}>₹{ipRoomCharges.toFixed(2)}</strong>
+                    </div>
+
+                    <h4 style={{margin:'0 0 12px', color:'#94a3b8'}}>Other Service Charges</h4>
+                    <div className="form-grid" style={{gridTemplateColumns:'1fr 1fr 1fr', gap:'12px'}}>
+                      {[
+                        {key:'doctor_charges', label:'Doctor Charges (₹)'}, {key:'nursing_charges', label:'Nursing Charges (₹)'},
+                        {key:'pharmacy_charges', label:'Pharmacy Charges (₹)'}, {key:'lab_charges', label:'Lab Charges (₹)'}
+                      ].map(({key, label}) => (
+                        <div key={key} className="form-group">
+                          <label>{label}</label>
+                          <input type="number" min="0" step="0.01" value={(ipBillForm as any)[key]} onChange={e => setIpBillForm({...ipBillForm, [key]: parseFloat(e.target.value)||0})} />
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Other Charges */}
+                    <div style={{marginBottom:'16px'}}>
+                      <label style={{display:'block', marginBottom:'8px', fontSize:'13px', color:'#94a3b8'}}>Other Charges</label>
+                      {ipOtherCharges.map((c, i) => (
+                        <div key={i} style={{display:'flex', gap:'8px', alignItems:'center', marginBottom:'6px'}}>
+                          <span style={{flex:1, padding:'6px 10px', background:'rgba(255,255,255,0.05)', borderRadius:'6px', fontSize:'13px'}}>{c.name}: ₹{c.amount}</span>
+                          <button type="button" onClick={() => setIpOtherCharges(ipOtherCharges.filter((_,j) => j!==i))} style={{background:'#ef4444', border:'none', color:'#fff', borderRadius:'6px', padding:'4px 10px', cursor:'pointer'}}>×</button>
+                        </div>
+                      ))}
+                      <div style={{display:'flex', gap:'8px', marginTop:'8px'}}>
+                        <input id="ip-other-name" type="text" placeholder="Charge name" style={{flex:2, padding:'8px', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:'6px', color:'#fff'}} />
+                        <input id="ip-other-amt" type="number" placeholder="Amount" style={{flex:1, padding:'8px', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:'6px', color:'#fff'}} />
+                        <button type="button" className="btn btn-primary" style={{padding:'8px 14px'}} onClick={() => {
+                          const n = (document.getElementById('ip-other-name') as HTMLInputElement)?.value;
+                          const a = parseFloat((document.getElementById('ip-other-amt') as HTMLInputElement)?.value||'0');
+                          if (n && a>0) { setIpOtherCharges([...ipOtherCharges, {name:n, amount:a}]); (document.getElementById('ip-other-name') as HTMLInputElement).value=''; (document.getElementById('ip-other-amt') as HTMLInputElement).value=''; }
+                        }}>+ Add</button>
+                      </div>
+                    </div>
+
+                    <div className="form-grid" style={{gridTemplateColumns:'1fr 1fr 1fr', gap:'12px'}}>
+                      <div className="form-group">
+                        <label>Discount (%)</label>
+                        <input type="number" min="0" max="100" value={ipBillForm.discount} onChange={e => setIpBillForm({...ipBillForm, discount: parseFloat(e.target.value)||0})} />
+                      </div>
+                      <div className="form-group">
+                        <label>GST (%)</label>
+                        <input type="number" min="0" max="28" value={ipBillForm.gst} onChange={e => setIpBillForm({...ipBillForm, gst: parseFloat(e.target.value)||0})} />
+                      </div>
+                      <div className="form-group">
+                        <label>Payment Mode</label>
+                        <select value={ipBillForm.payment_mode} onChange={e => setIpBillForm({...ipBillForm, payment_mode: e.target.value})}>
+                          <option>Cash</option><option>UPI</option><option>Card</option><option>Bank Transfer</option><option>Split</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {ipBillForm.payment_mode === 'Split' && (
+                      <div className="glass-card" style={{background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.3)', marginBottom:'16px'}}>
+                        <h4 style={{marginBottom:'12px', color:'#a78bfa'}}>Split Payment Breakdown</h4>
+                        <div className="form-grid" style={{gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'10px'}}>
+                          {(['cash','upi','card','bank'] as const).map(mode => (
+                            <div key={mode} className="form-group">
+                              <label style={{textTransform:'capitalize'}}>{mode} (₹)</label>
+                              <input type="number" min="0" value={ipSplitPayment[mode]} onChange={e => setIpSplitPayment({...ipSplitPayment, [mode]: parseFloat(e.target.value)||0})} />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Bill Summary */}
+                    <div style={{background:'rgba(139,92,246,0.1)', border:'1px solid rgba(139,92,246,0.3)', borderRadius:'12px', padding:'16px', marginBottom:'16px'}}>
+                      <div style={{display:'flex', justifyContent:'space-between', marginBottom:'6px', fontSize:'14px'}}><span style={{color:'#94a3b8'}}>Subtotal</span><span>₹{ipSubtotal.toFixed(2)}</span></div>
+                      <div style={{display:'flex', justifyContent:'space-between', marginBottom:'6px', fontSize:'14px'}}><span style={{color:'#94a3b8'}}>Discount ({ipBillForm.discount}%)</span><span style={{color:'#ef4444'}}>-₹{ipDiscountAmt.toFixed(2)}</span></div>
+                      <div style={{display:'flex', justifyContent:'space-between', marginBottom:'12px', fontSize:'14px'}}><span style={{color:'#94a3b8'}}>GST ({ipBillForm.gst}%)</span><span style={{color:'#10b981'}}>+₹{ipGstAmt.toFixed(2)}</span></div>
+                      <div style={{display:'flex', justifyContent:'space-between', fontSize:'20px', fontWeight:'700', color:'#8b5cf6', borderTop:'1px solid rgba(139,92,246,0.3)', paddingTop:'10px'}}><span>Total</span><span>₹{ipTotal.toFixed(2)}</span></div>
+                    </div>
+
+                    <button type="submit" className="btn btn-primary" style={{width:'100%', padding:'14px', fontSize:'16px', background:'linear-gradient(135deg, #7c3aed, #8b5cf6)'}}>
+                      <Building2 size={18} style={{marginRight:'8px', verticalAlign:'middle'}} /> Generate IP Bill & GST Invoice
+                    </button>
+                  </form>
+                </div>
+                {viewBillDetail && viewBillDetail.bill_type === 'ip' && (
+                  <div className="glass-card">
+                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px'}}>
+                      <h3>✅ IP Bill #{viewBillDetail.id} Created</h3>
+                      <button className="btn btn-primary" onClick={() => printInvoice(viewBillDetail, 'ip')} style={{background:'linear-gradient(135deg,#7c3aed,#8b5cf6)'}}><Printer size={16} style={{marginRight:'6px'}} />Print GST Invoice</button>
+                    </div>
+                    <p style={{color:'#10b981', marginBottom:'12px'}}>Patient: {patients.find(p=>p.id===viewBillDetail.patient_id)?.name}</p>
+                    <div style={{display:'flex', justifyContent:'space-between', padding:'10px 0', borderBottom:'1px solid rgba(255,255,255,0.1)'}}><span style={{color:'#94a3b8'}}>Total Amount</span><span style={{fontSize:'24px', fontWeight:'700', color:'#8b5cf6'}}>₹{viewBillDetail.total?.toFixed(2)}</span></div>
+                    <div style={{display:'flex', justifyContent:'space-between', padding:'10px 0'}}><span style={{color:'#94a3b8'}}>Days Stayed</span><span style={{color:'#a78bfa'}}>{viewBillDetail.days_stayed} days</span></div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* OP Bill History */}
+            {billingTab === 'op_history' && (
+              <div className="glass-card">
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px'}}>
+                  <h3>OP Bill History ({opBills.length} bills)</h3>
+                  <button className="btn btn-primary" style={{padding:'8px 14px', fontSize:'13px'}} onClick={() => exportTableToCSV('op-bill-table', 'op_bills.csv')}><Download size={14} style={{marginRight:'6px', verticalAlign:'middle'}} />Export CSV</button>
+                </div>
+                <div className="table-container">
+                  <table id="op-bill-table">
+                    <thead><tr><th>Bill #</th><th>Patient</th><th>Doctor</th><th>Date</th><th>Total</th><th>Payment</th><th>Actions</th></tr></thead>
+                    <tbody>
+                      {opBills.map(b => {
+                        const pat = patients.find(p => p.id === b.patient_id);
+                        return (
+                          <tr key={b.id}>
+                            <td>#{b.id}</td>
+                            <td>{pat?.name || `Patient #${b.patient_id}`}</td>
+                            <td>{b.doctor_name || '-'}</td>
+                            <td>{new Date(b.bill_date).toLocaleDateString('en-IN')}</td>
+                            <td style={{color:'#10b981', fontWeight:'600'}}>₹{b.total.toFixed(2)}</td>
+                            <td><span style={{padding:'2px 10px', borderRadius:'12px', fontSize:'12px', background:'rgba(59,130,246,0.2)', color:'#60a5fa'}}>{b.payment_mode}</span></td>
+                            <td><button style={{background:'none', border:'none', color:'#3b82f6', cursor:'pointer', fontSize:'13px'}} onClick={() => printInvoice(b, 'op')}>🖨 Print</button></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* IP Bill History */}
+            {billingTab === 'ip_history' && (
+              <div className="glass-card">
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px'}}>
+                  <h3>IP Bill History ({ipBills.length} bills)</h3>
+                  <button className="btn btn-primary" style={{padding:'8px 14px', fontSize:'13px'}} onClick={() => exportTableToCSV('ip-bill-table', 'ip_bills.csv')}><Download size={14} style={{marginRight:'6px', verticalAlign:'middle'}} />Export CSV</button>
+                </div>
+                <div className="table-container">
+                  <table id="ip-bill-table">
+                    <thead><tr><th>Bill #</th><th>Patient</th><th>Doctor</th><th>Days</th><th>Date</th><th>Total</th><th>Payment</th><th>Actions</th></tr></thead>
+                    <tbody>
+                      {ipBills.map(b => {
+                        const pat = patients.find(p => p.id === b.patient_id);
+                        return (
+                          <tr key={b.id}>
+                            <td>#{b.id}</td>
+                            <td>{pat?.name || `Patient #${b.patient_id}`}</td>
+                            <td>{b.doctor_name || '-'}</td>
+                            <td>{b.days_stayed}</td>
+                            <td>{new Date(b.bill_date).toLocaleDateString('en-IN')}</td>
+                            <td style={{color:'#8b5cf6', fontWeight:'600'}}>₹{b.total.toFixed(2)}</td>
+                            <td><span style={{padding:'2px 10px', borderRadius:'12px', fontSize:'12px', background:'rgba(139,92,246,0.2)', color:'#a78bfa'}}>{b.payment_mode}</span></td>
+                            <td><button style={{background:'none', border:'none', color:'#8b5cf6', cursor:'pointer', fontSize:'13px'}} onClick={() => printInvoice(b, 'ip')}>🖨 Print</button></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* =========================================================== */}
+        {/* REPORTS MODULE */}
+        {/* =========================================================== */}
+        {activeTab === 'reports' && (
+          <div>
+            <div className="header no-print">
+              <div className="header-title">
+                <h1>Reports</h1>
+                <p>Daily, Monthly, Yearly, Revenue & Department Reports</p>
+              </div>
+            </div>
+
+            {/* Report Type Selector */}
+            <div style={{display:'flex', gap:'8px', padding:'0 24px 16px', flexWrap:'wrap'}} className="no-print">
+              {[
+                {key:'daily', label:'📅 Daily'}, {key:'monthly', label:'📆 Monthly'}, {key:'yearly', label:'📊 Yearly'},
+                {key:'revenue', label:'💰 Revenue'}, {key:'doctor', label:'👨‍⚕️ Doctor Wise'}, {key:'medicine', label:'💊 Medicine Sales'},
+                {key:'department', label:'🏢 Department Wise'}, {key:'patient', label:'🧑‍⚕️ Patient History'},
+                {key:'stock', label:'📦 Stock Valuation'}, {key:'lab', label:'🔬 Lab Summary'}, {key:'discharge', label:'🏥 Discharge'}
+              ].map(r => (
+                <button key={r.key} onClick={() => { 
+                  setReportType(r.key); 
+                  if(r.key==='daily') loadDailyReport(); 
+                  else if(r.key==='monthly') loadMonthlyReport(); 
+                  else if(r.key==='yearly') loadYearlyReport(); 
+                  else if(r.key==='revenue') loadRevenueReport(); 
+                  else if(r.key==='doctor') loadDoctorReport(); 
+                  else if(r.key==='medicine') loadMedicineSalesReport(); 
+                  else if(r.key==='department') loadDepartmentWiseReport();
+                  else if(r.key==='patient') loadPatientReport();
+                  else if(r.key==='stock') loadMedicineStockReport();
+                  else if(r.key==='lab') loadLabSummaryReport();
+                  else if(r.key==='discharge') loadDischargeReport();
+                }}
+                  style={{padding:'8px 18px', borderRadius:'20px', border:'none', cursor:'pointer', fontWeight:600, fontSize:'13px',
+                    background: reportType === r.key ? 'linear-gradient(135deg, #3b82f6, #2563eb)' : 'rgba(255,255,255,0.07)',
+                    color: reportType === r.key ? '#fff' : '#94a3b8', transition:'all 0.3s'}}>
+                  {r.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Daily Report */}
+            {reportType === 'daily' && (
+              <div>
+                <div style={{display:'flex', gap:'12px', alignItems:'center', padding:'0 24px 16px'}} className="no-print">
+                  <input type="date" value={reportDate} onChange={e => setReportDate(e.target.value)}
+                    style={{padding:'8px 12px', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:'8px', color:'#fff'}} />
+                  <button className="btn btn-primary" onClick={loadDailyReport} style={{padding:'8px 18px'}}>Load Report</button>
+                  {dailyReport && <><button className="btn btn-primary" style={{padding:'8px 14px', background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)'}} onClick={() => exportTableToCSV('daily-report-table', `daily_report_${reportDate}.csv`)}><Download size={14} style={{marginRight:'4px', verticalAlign:'middle'}} />CSV</button><button className="btn btn-primary" style={{padding:'8px 14px', background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)'}} onClick={() => printSection('daily-report-section')}><Printer size={14} style={{marginRight:'4px', verticalAlign:'middle'}} />Print</button></>}
+                </div>
+                {dailyReport && (
+                  <div id="daily-report-section">
+                    <div className="stat-grid" style={{padding:'0 24px 16px'}}>
+                      {[
+                        {label:'Total Revenue', value:`₹${dailyReport.total_revenue.toFixed(2)}`, color:'#3b82f6'},
+                        {label:'OP Revenue', value:`₹${dailyReport.op_revenue.toFixed(2)}`, color:'#10b981'},
+                        {label:'IP Revenue', value:`₹${dailyReport.ip_revenue.toFixed(2)}`, color:'#8b5cf6'},
+                        {label:'Pharmacy Revenue', value:`₹${dailyReport.pharmacy_revenue.toFixed(2)}`, color:'#f59e0b'},
+                        {label:'Lab Revenue', value:`₹${dailyReport.lab_revenue.toFixed(2)}`, color:'#ef4444'},
+                        {label:'Total Bills', value:`${dailyReport.total_bills} bills`, color:'#94a3b8'},
+                      ].map(({label, value, color}) => (
+                        <div key={label} className="glass-card stat-card">
+                          <div><label style={{color:'#94a3b8', fontSize:'12px'}}>{label}</label><div className="stat-val" style={{color, fontSize:'20px'}}>{value}</div></div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="glass-card" style={{margin:'0 24px'}}>
+                      <h3 style={{marginBottom:'16px'}}>Daily Revenue Breakdown - {dailyReport.date}</h3>
+                      <div className="table-container">
+                        <table id="daily-report-table">
+                          <thead><tr><th>Category</th><th>Revenue</th><th>% of Total</th></tr></thead>
+                          <tbody>
+                            {[['OP Billing', dailyReport.op_revenue], ['IP Billing', dailyReport.ip_revenue], ['Pharmacy', dailyReport.pharmacy_revenue], ['Laboratory', dailyReport.lab_revenue]].map(([cat, rev]) => (
+                              <tr key={cat as string}><td>{cat}</td><td style={{color:'#10b981'}}>₹{(rev as number).toFixed(2)}</td><td>{dailyReport.total_revenue > 0 ? (((rev as number)/dailyReport.total_revenue)*100).toFixed(1) : 0}%</td></tr>
+                            ))}
+                            <tr style={{fontWeight:'700', borderTop:'2px solid rgba(255,255,255,0.1)'}}><td>Total</td><td style={{color:'#3b82f6'}}>₹{dailyReport.total_revenue.toFixed(2)}</td><td>100%</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Monthly Report */}
+            {reportType === 'monthly' && (
+              <div>
+                <div style={{display:'flex', gap:'12px', alignItems:'center', padding:'0 24px 16px'}} className="no-print">
+                  <select value={reportMonth} onChange={e => setReportMonth(Number(e.target.value))} style={{padding:'8px 12px', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:'8px', color:'#fff'}}>
+                    {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((m,i) => <option key={i} value={i+1}>{m}</option>)}
+                  </select>
+                  <input type="number" value={reportYear} onChange={e => setReportYear(Number(e.target.value))} style={{padding:'8px 12px', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:'8px', color:'#fff', width:'100px'}} />
+                  <button className="btn btn-primary" onClick={loadMonthlyReport} style={{padding:'8px 18px'}}>Load Report</button>
+                  {monthlyReport.length > 0 && <><button className="btn btn-primary" style={{padding:'8px 14px', background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)'}} onClick={() => exportTableToCSV('monthly-table', `monthly_report_${reportYear}_${reportMonth}.csv`)}><Download size={14} style={{marginRight:'4px', verticalAlign:'middle'}} />CSV</button><button className="btn btn-primary" style={{padding:'8px 14px', background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)'}} onClick={() => printSection('monthly-section')}><Printer size={14} style={{marginRight:'4px', verticalAlign:'middle'}} />Print</button></>}
+                </div>
+                {monthlyReport.length > 0 && (
+                  <div id="monthly-section" className="glass-card" style={{margin:'0 24px'}}>
+                    <h3 style={{marginBottom:'16px'}}>Monthly Report</h3>
+                    <div className="table-container">
+                      <table id="monthly-table">
+                        <thead><tr><th>Date</th><th>OP Revenue</th><th>IP Revenue</th><th>Pharmacy</th><th>Lab</th><th>Total Revenue</th><th>Bills</th></tr></thead>
+                        <tbody>
+                          {monthlyReport.map(r => (
+                            <tr key={r.date}>
+                              <td>{r.date}</td><td>₹{r.op_revenue.toFixed(2)}</td><td>₹{r.ip_revenue.toFixed(2)}</td>
+                              <td>₹{r.pharmacy_revenue.toFixed(2)}</td><td>₹{r.lab_revenue.toFixed(2)}</td>
+                              <td style={{color:'#3b82f6', fontWeight:'600'}}>₹{r.total_revenue.toFixed(2)}</td><td>{r.total_bills}</td>
+                            </tr>
+                          ))}
+                          <tr style={{fontWeight:'700', borderTop:'2px solid rgba(255,255,255,0.1)'}}>
+                            <td>Total</td>
+                            <td>₹{monthlyReport.reduce((s,r)=>s+r.op_revenue,0).toFixed(2)}</td>
+                            <td>₹{monthlyReport.reduce((s,r)=>s+r.ip_revenue,0).toFixed(2)}</td>
+                            <td>₹{monthlyReport.reduce((s,r)=>s+r.pharmacy_revenue,0).toFixed(2)}</td>
+                            <td>₹{monthlyReport.reduce((s,r)=>s+r.lab_revenue,0).toFixed(2)}</td>
+                            <td style={{color:'#3b82f6'}}>₹{monthlyReport.reduce((s,r)=>s+r.total_revenue,0).toFixed(2)}</td>
+                            <td>{monthlyReport.reduce((s,r)=>s+r.total_bills,0)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Yearly Report */}
+            {reportType === 'yearly' && (
+              <div>
+                <div style={{display:'flex', gap:'12px', alignItems:'center', padding:'0 24px 16px'}} className="no-print">
+                  <input type="number" value={reportYear} onChange={e => setReportYear(Number(e.target.value))} style={{padding:'8px 12px', background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:'8px', color:'#fff', width:'120px'}} />
+                  <button className="btn btn-primary" onClick={loadYearlyReport} style={{padding:'8px 18px'}}>Load Report</button>
+                  {yearlyReport.length > 0 && <button className="btn btn-primary" style={{padding:'8px 14px', background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)'}} onClick={() => exportTableToCSV('yearly-table', `yearly_report_${reportYear}.csv`)}><Download size={14} style={{marginRight:'4px', verticalAlign:'middle'}} />CSV</button>}
+                </div>
+                {yearlyReport.length > 0 && (
+                  <div className="glass-card" style={{margin:'0 24px'}}>
+                    <h3 style={{marginBottom:'16px'}}>Yearly Report - {reportYear}</h3>
+                    <div className="table-container">
+                      <table id="yearly-table">
+                        <thead><tr><th>Month</th><th>OP</th><th>IP</th><th>Pharmacy</th><th>Lab</th><th>Total</th><th>Bills</th></tr></thead>
+                        <tbody>
+                          {yearlyReport.map(r => (
+                            <tr key={r.month}><td>{r.month}</td><td>₹{r.op_revenue.toFixed(0)}</td><td>₹{r.ip_revenue.toFixed(0)}</td><td>₹{r.pharmacy_revenue.toFixed(0)}</td><td>₹{r.lab_revenue.toFixed(0)}</td><td style={{color:'#3b82f6', fontWeight:'600'}}>₹{r.total_revenue.toFixed(0)}</td><td>{r.total_bills}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Revenue Breakdown */}
+            {reportType === 'revenue' && (
+              <div>
+                <div style={{padding:'0 24px 16px'}} className="no-print">
+                  <button className="btn btn-primary" onClick={loadRevenueReport} style={{padding:'8px 18px'}}>Load Revenue Breakdown</button>
+                </div>
+                {revenueReport && (
+                  <div className="stat-grid" style={{padding:'0 24px'}}>
+                    {[
+                      {label:'OP Billing', value: revenueReport.op_total, color:'#3b82f6', icon:'🏥'},
+                      {label:'IP Billing', value: revenueReport.ip_total, color:'#8b5cf6', icon:'🛏️'},
+                      {label:'Pharmacy', value: revenueReport.pharmacy_total, color:'#10b981', icon:'💊'},
+                      {label:'Laboratory', value: revenueReport.lab_total, color:'#f59e0b', icon:'🧪'},
+                      {label:'Grand Total', value: revenueReport.grand_total, color:'#ef4444', icon:'💰'},
+                    ].map(({label, value, color, icon}) => (
+                      <div key={label} className="glass-card stat-card" style={{border:`1px solid ${color}30`}}>
+                        <div style={{fontSize:'28px', marginBottom:'8px'}}>{icon}</div>
+                        <label style={{color:'#94a3b8', fontSize:'12px'}}>{label}</label>
+                        <div className="stat-val" style={{color, fontSize:'22px', fontWeight:'700'}}>₹{value.toFixed(2)}</div>
+                        {revenueReport.grand_total > 0 && <div style={{color:'#64748b', fontSize:'12px', marginTop:'4px'}}>{((value/revenueReport.grand_total)*100).toFixed(1)}% of total</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Doctor Wise Report */}
+            {reportType === 'doctor' && (
+              <div>
+                <div style={{padding:'0 24px 16px'}} className="no-print">
+                  <button className="btn btn-primary" onClick={loadDoctorReport} style={{padding:'8px 18px'}}>Load Doctor Report</button>
+                  {doctorReport.length > 0 && <button className="btn btn-primary" style={{marginLeft:'8px', padding:'8px 14px', background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)'}} onClick={() => exportTableToCSV('doctor-table', 'doctor_wise_report.csv')}><Download size={14} style={{marginRight:'4px', verticalAlign:'middle'}} />CSV</button>}
+                </div>
+                {doctorReport.length > 0 && (
+                  <div className="glass-card" style={{margin:'0 24px'}}>
+                    <h3 style={{marginBottom:'16px'}}>Doctor Wise Revenue</h3>
+                    <div className="table-container">
+                      <table id="doctor-table">
+                        <thead><tr><th>Doctor Name</th><th>OP Bills</th><th>IP Bills</th><th>Total Revenue</th></tr></thead>
+                        <tbody>
+                          {doctorReport.sort((a,b) => b.total_revenue - a.total_revenue).map((d, i) => (
+                            <tr key={i}><td>👨‍⚕️ {d.doctor_name}</td><td>{d.op_bills}</td><td>{d.ip_bills}</td><td style={{color:'#10b981', fontWeight:'600'}}>₹{d.total_revenue.toFixed(2)}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Department Wise Report */}
+            {reportType === 'department' && (
+              <div className="glass-card" style={{margin:'0 24px'}}>
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px'}}>
+                  <h3>Department Wise Revenue</h3>
+                  <div>
+                    <button className="btn btn-primary" style={{marginRight:'8px'}} onClick={() => exportTableToCSV('dept-table', 'department_report.csv')}><Download size={14}/> CSV</button>
+                    <button className="btn btn-primary" onClick={() => printSection('dept-section')}><Printer size={14}/> Print</button>
+                  </div>
+                </div>
+                <div id="dept-section" className="table-container">
+                  <table id="dept-table">
+                    <thead><tr><th>Department</th><th>Total Bills</th><th>Revenue</th></tr></thead>
+                    <tbody>
+                      {departmentWiseReport.map(r => (
+                        <tr key={r.department}>
+                          <td>{r.department}</td>
+                          <td>{r.total_bills}</td>
+                          <td style={{color:'#10b981', fontWeight:'bold'}}>₹{r.total_revenue.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Patient Report */}
+            {reportType === 'patient' && (
+              <div style={{margin:'0 24px'}}>
+                <div style={{display:'flex', gap:'12px', marginBottom:'16px'}}>
+                  <input type="text" placeholder="Enter Patient ID" value={patientReportId} onChange={e => setPatientReportId(e.target.value)} style={{padding:'8px', borderRadius:'6px', background:'rgba(255,255,255,0.1)', color:'#fff', border:'1px solid rgba(255,255,255,0.2)'}} />
+                  <button className="btn btn-primary" onClick={loadPatientReport}>Load Patient Summary</button>
+                  {patientReportData && <button className="btn btn-primary" onClick={() => printSection('patient-section')}><Printer size={14}/> Print</button>}
+                </div>
+                {patientReportData && (
+                  <div id="patient-section" className="glass-card">
+                    <h3>Patient: {patientReportData.patient.name} (ID: {patientReportData.patient.id})</h3>
+                    <p style={{color:'#94a3b8', marginBottom:'16px'}}>Age: {patientReportData.patient.age} | Gender: {patientReportData.patient.gender} | Phone: {patientReportData.patient.phone}</p>
+                    <div className="stat-grid">
+                      <div className="glass-card"><div><label>OP Visits</label><div className="stat-val">{patientReportData.op_visits}</div></div></div>
+                      <div className="glass-card"><div><label>Admissions</label><div className="stat-val">{patientReportData.admissions}</div></div></div>
+                      <div className="glass-card"><div><label>Total Revenue</label><div className="stat-val" style={{color:'#3b82f6'}}>₹{patientReportData.total_revenue.toFixed(2)}</div></div></div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Medicine Stock Report */}
+            {reportType === 'stock' && (
+              <div className="glass-card" style={{margin:'0 24px'}}>
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px'}}>
+                  <h3>Medicine Stock & Valuation</h3>
+                  <div>
+                    <button className="btn btn-primary" style={{marginRight:'8px'}} onClick={() => exportTableToCSV('stock-table', 'stock_report.csv')}><Download size={14}/> CSV</button>
+                    <button className="btn btn-primary" onClick={() => printSection('stock-section')}><Printer size={14}/> Print</button>
+                  </div>
+                </div>
+                <div id="stock-section" className="table-container">
+                  <table id="stock-table">
+                    <thead><tr><th>Item Name</th><th>Category</th><th>Qty</th><th>Unit Price</th><th>Total Value</th></tr></thead>
+                    <tbody>
+                      {medicineStockReport.map(r => (
+                        <tr key={r.id}>
+                          <td>{r.name}</td>
+                          <td>{r.category}</td>
+                          <td style={{color: r.quantity <= r.min_stock_level ? '#ef4444' : '#10b981'}}>{r.quantity}</td>
+                          <td>₹{r.unit_price.toFixed(2)}</td>
+                          <td>₹{(r.quantity * r.unit_price).toFixed(2)}</td>
+                        </tr>
+                      ))}
+                      <tr style={{fontWeight:'bold', borderTop:'2px solid rgba(255,255,255,0.1)'}}>
+                        <td colSpan={4}>Total Inventory Valuation</td>
+                        <td style={{color:'#3b82f6'}}>₹{medicineStockReport.reduce((s:number, r:any) => s + (r.quantity * r.unit_price), 0).toFixed(2)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Lab Report */}
+            {reportType === 'lab' && (
+              <div className="glass-card" style={{margin:'0 24px'}}>
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px'}}>
+                  <h3>Lab Test Reports</h3>
+                  <div>
+                    <button className="btn btn-primary" style={{marginRight:'8px'}} onClick={() => exportTableToCSV('lab-table', 'lab_report.csv')}><Download size={14}/> CSV</button>
+                    <button className="btn btn-primary" onClick={() => printSection('lab-section')}><Printer size={14}/> Print</button>
+                  </div>
+                </div>
+                <div id="lab-section" className="table-container">
+                  <table id="lab-table">
+                    <thead><tr><th>Date</th><th>Patient ID</th><th>Test Name</th><th>Status</th><th>Result</th><th>Actions</th></tr></thead>
+                    <tbody>
+                      {labSummaryReport.map(r => (
+                        <tr key={r.id}>
+                          <td>{new Date(r.report_date).toLocaleDateString()}</td>
+                          <td>{r.patient_id}</td>
+                          <td>{r.test_name}</td>
+                          <td>{r.status}</td>
+                          <td>{r.result_value || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Discharge Report */}
+            {reportType === 'discharge' && (
+              <div className="glass-card" style={{margin:'0 24px'}}>
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px'}}>
+                  <h3>Discharged Patients</h3>
+                  <div>
+                    <button className="btn btn-primary" style={{marginRight:'8px'}} onClick={() => exportTableToCSV('discharge-table', 'discharge_report.csv')}><Download size={14}/> CSV</button>
+                    <button className="btn btn-primary" onClick={() => printSection('discharge-section')}><Printer size={14}/> Print</button>
+                  </div>
+                </div>
+                <div id="discharge-section" className="table-container">
+                  <table id="discharge-table">
+                    <thead><tr><th>Patient ID</th><th>Admission Date</th><th>Discharge Date</th><th>Ward</th></tr></thead>
+                    <tbody>
+                      {dischargeReport.map(r => (
+                        <tr key={r.id}>
+                          <td>{r.patient_id}</td>
+                          <td>{new Date(r.admission_date).toLocaleDateString()}</td>
+                          <td>{r.discharge_date ? new Date(r.discharge_date).toLocaleDateString() : '-'}</td>
+                          <td>{r.ward_number}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Medicine Sales Report */}
+            {reportType === 'medicine' && (
+              <div>
+                <div style={{padding:'0 24px 16px'}} className="no-print">
+                  <button className="btn btn-primary" onClick={loadMedicineSalesReport} style={{padding:'8px 18px'}}>Load Medicine Sales</button>
+                  {medicineSalesReport.length > 0 && <button className="btn btn-primary" style={{marginLeft:'8px', padding:'8px 14px', background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)'}} onClick={() => exportTableToCSV('medicine-table', 'medicine_sales_report.csv')}><Download size={14} style={{marginRight:'4px', verticalAlign:'middle'}} />CSV</button>}
+                </div>
+                {medicineSalesReport.length > 0 && (
+                  <div className="glass-card" style={{margin:'0 24px'}}>
+                    <h3 style={{marginBottom:'16px'}}>Medicine Sales Report</h3>
+                    <div className="table-container">
+                      <table id="medicine-table">
+                        <thead><tr><th>#</th><th>Medicine Name</th><th>Qty Sold</th><th>Revenue</th></tr></thead>
+                        <tbody>
+                          {medicineSalesReport.map((m, i) => (
+                            <tr key={i}><td>{i+1}</td><td>💊 {m.medicine_name}</td><td>{m.total_quantity_sold}</td><td style={{color:'#10b981', fontWeight:'600'}}>₹{m.total_revenue.toFixed(2)}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* =========================================================== */}
+        {/* GLOBAL SEARCH */}
+        {/* =========================================================== */}
+        {activeTab === 'search' && (
+          <div>
+            <div className="header no-print">
+              <div className="header-title">
+                <h1>Global Search</h1>
+                <p>Search by Patient ID, Name, Mobile, Aadhaar, Token #, Bill #, Admission #</p>
+              </div>
+            </div>
+
+            <div style={{padding:'0 24px 24px'}}>
+              {/* Search Input */}
+              <div style={{position:'relative', marginBottom:'24px'}}>
+                <Search size={20} style={{position:'absolute', left:'16px', top:'50%', transform:'translateY(-50%)', color:'#94a3b8'}} />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => handleSearch(e.target.value)}
+                  placeholder="Type patient name, ID, mobile, Aadhaar, token #, bill #..."
+                  style={{
+                    width:'100%', padding:'16px 16px 16px 48px', fontSize:'16px',
+                    background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.15)',
+                    borderRadius:'12px', color:'#fff', outline:'none',
+                    boxShadow:'0 0 0 0 rgba(59,130,246,0)', transition:'all 0.3s'
+                  }}
+                  onFocus={e => e.target.style.border='1px solid rgba(59,130,246,0.5)'}
+                  onBlur={e => e.target.style.border='1px solid rgba(255,255,255,0.15)'}
+                />
+                {searchLoading && <div style={{position:'absolute', right:'16px', top:'50%', transform:'translateY(-50%)', color:'#3b82f6', fontSize:'13px'}}>Searching...</div>}
+              </div>
+
+              {/* Search Tips */}
+              {!searchQuery && (
+                <div className="stat-grid" style={{marginBottom:'24px'}}>
+                  {[
+                    {icon:'🆔', label:'Patient ID', hint:'Type: 123'},
+                    {icon:'👤', label:'Patient Name', hint:'Type: Arun'},
+                    {icon:'📱', label:'Mobile Number', hint:'Type: 9876543210'},
+                    {icon:'🪪', label:'Aadhaar', hint:'Type: XXXX XXXX XXXX'},
+                    {icon:'🎫', label:'Token Number', hint:'Type: 5'},
+                    {icon:'🧾', label:'Bill Number', hint:'Type: 12'},
+                  ].map(({icon, label, hint}) => (
+                    <div key={label} className="glass-card" style={{textAlign:'center', padding:'16px'}}>
+                      <div style={{fontSize:'24px', marginBottom:'6px'}}>{icon}</div>
+                      <div style={{fontWeight:'600', fontSize:'13px', marginBottom:'4px'}}>{label}</div>
+                      <div style={{color:'#64748b', fontSize:'12px'}}>{hint}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Search Results */}
+              {searchQuery && searchResults.length === 0 && !searchLoading && (
+                <div style={{textAlign:'center', padding:'40px', color:'#64748b'}}>
+                  <Search size={48} style={{opacity:0.3, marginBottom:'12px'}} />
+                  <p>No results found for "{searchQuery}"</p>
+                </div>
+              )}
+
+              {searchResults.length > 0 && (
+                <div>
+                  <h3 style={{marginBottom:'16px', color:'#94a3b8', fontSize:'14px', letterSpacing:'1px', textTransform:'uppercase'}}>{searchResults.length} Results Found</h3>
+                  <div style={{display:'flex', flexDirection:'column', gap:'12px'}}>
+                    {searchResults.map((result, i) => {
+                      const typeColors: Record<string, string> = {
+                        patient: '#3b82f6', op_token: '#10b981', op_bill: '#f59e0b',
+                        ip_bill: '#8b5cf6', pharmacy_bill: '#06b6d4', lab_bill: '#ef4444', admission: '#84cc16'
+                      };
+                      const typeIcons: Record<string, string> = {
+                        patient: '👤', op_token: '🎫', op_bill: '🏥', ip_bill: '🛏️',
+                        pharmacy_bill: '💊', lab_bill: '🧪', admission: '🏨'
+                      };
+                      const color = typeColors[result.type] || '#94a3b8';
+                      return (
+                        <div key={i} className="glass-card" style={{display:'flex', alignItems:'center', gap:'16px', padding:'16px', border:`1px solid ${color}30`, cursor:'pointer', transition:'all 0.2s'}}
+                          onClick={async () => {
+                            try {
+                              if (result.type === 'patient' || result.type === 'op_token' || result.type === 'admission') { 
+                                setActiveTab('reports'); 
+                                setReportType('patient'); 
+                                setPatientReportId(String(result.patient_id));
+                                const res = await axios.get(`${API_BASE}/reports/patient/${result.patient_id}`);
+                                setPatientReportData(res.data);
+                              }
+                              else if (result.type === 'op_bill') {
+                                setActiveTab('billing');
+                              }
+                              else if (result.type === 'ip_bill') {
+                                setActiveTab('billing');
+                              }
+                              else if (result.type === 'pharmacy_bill') { 
+                                setActiveTab('pharmacy'); 
+                              }
+                              else if (result.type === 'lab_bill') { 
+                                setActiveTab('lab_reports'); 
+                              }
+                            } catch(e) { console.error(e); }
+                          }}
+                          onMouseOver={e => (e.currentTarget.style.border = `1px solid ${color}60`)}
+                          onMouseOut={e => (e.currentTarget.style.border = `1px solid ${color}30`)}>
+                          <div style={{width:'44px', height:'44px', borderRadius:'10px', background:`${color}20`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'20px', flexShrink:0}}>{typeIcons[result.type] || '📄'}</div>
+                          <div style={{flex:1}}>
+                            <div style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'4px'}}>
+                              <span style={{padding:'2px 10px', borderRadius:'12px', fontSize:'11px', fontWeight:'700', background:`${color}25`, color, textTransform:'uppercase'}}>{result.type.replace('_', ' ')}</span>
+                              <span style={{fontWeight:'600', fontSize:'14px'}}>{result.patient_name}</span>
+                            </div>
+                            <div style={{color:'#94a3b8', fontSize:'13px'}}>{result.detail}</div>
+                          </div>
+                          <div style={{textAlign:'right', flexShrink:0}}>
+                            {result.amount !== null && result.amount !== undefined && <div style={{fontWeight:'700', color:'#10b981', fontSize:'16px'}}>₹{result.amount?.toFixed(2)}</div>}
+                            {result.date && <div style={{color:'#64748b', fontSize:'12px', marginTop:'2px'}}>{result.date}</div>}
+                            <div style={{color:color, fontSize:'12px', marginTop:'4px'}}>Click to view →</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* =================== ADMIN SETTINGS =================== */}
+        {currentUser?.role === 'Admin' && activeTab === 'admin_settings' && (
+          <div>
+            <div className="header">
+              <div className="header-title">
+                <h1>Admin Settings</h1>
+                <p>Configure hospital information, receipt format, and system settings</p>
+              </div>
+              <button className="btn btn-primary" style={{display:'flex',alignItems:'center',gap:'6px'}} onClick={saveHospitalSettings}>
+                {settingsSaved ? <><span>✅</span> Saved!</> : <><Save size={16}/> Save Settings</>}
+              </button>
+            </div>
+
+            {/* Sub-tabs */}
+            <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
+              {[
+                {id:'hospital_info', icon:<Building2 size={16}/>, label:'Hospital Info'},
+                {id:'receipt_format', icon:<Receipt size={16}/>, label:'Receipt Format'},
+                {id:'printer_settings', icon:<Printer size={16}/>, label:'Printer Settings'},
+                {id:'backup', icon:<Database size={16}/>, label:'Backup & Restore'},
+                {id:'audit_logs', icon:<Shield size={16}/>, label:'Audit Logs'},
+              ].map(tab => (
+                <button key={tab.id}
+                  onClick={() => setAdminSettingsTab(tab.id)}
+                  style={{display:'flex',alignItems:'center',gap:'6px',padding:'8px 16px',borderRadius:'8px',border:`2px solid ${adminSettingsTab===tab.id?'#3b82f6':'var(--border-color)'}`,background:adminSettingsTab===tab.id?'rgba(59,130,246,0.1)':'transparent',color:adminSettingsTab===tab.id?'#3b82f6':'var(--text-muted)',cursor:'pointer',fontWeight:600,fontSize:'13px',transition:'all 0.2s'}}>
+                  {tab.icon}{tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Hospital Information */}
+            {adminSettingsTab === 'hospital_info' && (
+              <div className="glass-card">
+                <h3 style={{marginBottom:'20px',display:'flex',alignItems:'center',gap:'8px'}}><Building2 size={20}/> Hospital Information</h3>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'16px'}}>
+                  <div className="form-group">
+                    <label>Hospital Name</label>
+                    <input className="input-field" value={hospitalSettings.hospital_name||''} onChange={e=>setHospitalSettings({...hospitalSettings,hospital_name:e.target.value})} placeholder="Hospital Name"/>
+                  </div>
+                  <div className="form-group">
+                    <label>GST Number</label>
+                    <input className="input-field" value={hospitalSettings.gst_number||''} onChange={e=>setHospitalSettings({...hospitalSettings,gst_number:e.target.value})} placeholder="GST Registration Number"/>
+                  </div>
+                  <div className="form-group" style={{gridColumn:'span 2'}}>
+                    <label>Address</label>
+                    <input className="input-field" value={hospitalSettings.address||''} onChange={e=>setHospitalSettings({...hospitalSettings,address:e.target.value})} placeholder="Full Hospital Address"/>
+                  </div>
+                  <div className="form-group">
+                    <label>Contact Number</label>
+                    <input className="input-field" value={hospitalSettings.contact||''} onChange={e=>setHospitalSettings({...hospitalSettings,contact:e.target.value})} placeholder="+91 XXXXX XXXXX"/>
+                  </div>
+                  <div className="form-group">
+                    <label>Email</label>
+                    <input className="input-field" type="email" value={hospitalSettings.email||''} onChange={e=>setHospitalSettings({...hospitalSettings,email:e.target.value})} placeholder="info@hospital.com"/>
+                  </div>
+                </div>
+                <div style={{marginTop:'20px',padding:'16px',background:'rgba(59,130,246,0.05)',borderRadius:'8px',border:'1px solid rgba(59,130,246,0.2)'}}>
+                  <h4 style={{marginBottom:'12px',color:'#3b82f6'}}>Preview (GST Invoice Header)</h4>
+                  <div style={{textAlign:'center',fontFamily:'Arial'}}>
+                    <div style={{fontWeight:'bold',fontSize:'18px'}}>{hospitalSettings.hospital_name}</div>
+                    <div style={{color:'#64748b',fontSize:'13px'}}>{hospitalSettings.address}</div>
+                    <div style={{color:'#64748b',fontSize:'13px'}}>📞 {hospitalSettings.contact} | ✉ {hospitalSettings.email}</div>
+                    <div style={{color:'#64748b',fontSize:'13px'}}>GST: {hospitalSettings.gst_number}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Receipt Format */}
+            {adminSettingsTab === 'receipt_format' && (
+              <div className="glass-card">
+                <h3 style={{marginBottom:'20px',display:'flex',alignItems:'center',gap:'8px'}}><Receipt size={20}/> Receipt Format</h3>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'16px'}}>
+                  <div className="form-group" style={{gridColumn:'span 2'}}>
+                    <label>Receipt Header Text</label>
+                    <textarea className="input-field" rows={3} value={hospitalSettings.receipt_header||''} onChange={e=>setHospitalSettings({...hospitalSettings,receipt_header:e.target.value})} placeholder="Text to appear at top of receipt"/>
+                  </div>
+                  <div className="form-group" style={{gridColumn:'span 2'}}>
+                    <label>Receipt Footer Text</label>
+                    <textarea className="input-field" rows={3} value={hospitalSettings.receipt_footer||''} onChange={e=>setHospitalSettings({...hospitalSettings,receipt_footer:e.target.value})} placeholder="Text to appear at bottom of receipt (e.g. Thank you message)"/>
+                  </div>
+                </div>
+                <div style={{marginTop:'20px',padding:'16px',background:'rgba(16,185,129,0.05)',borderRadius:'8px',border:'1px solid rgba(16,185,129,0.2)'}}>
+                  <h4 style={{marginBottom:'12px',color:'#10b981'}}>Preview (Receipt)</h4>
+                  <div style={{textAlign:'center',fontFamily:'Arial',border:'1px dashed #ccc',padding:'12px',borderRadius:'8px'}}>
+                    <div style={{fontWeight:'bold'}}>{hospitalSettings.hospital_name}</div>
+                    <div style={{fontSize:'11px',color:'#64748b',marginTop:'4px'}}>{hospitalSettings.receipt_header}</div>
+                    <div style={{borderTop:'1px dashed #ccc',margin:'8px 0'}}/>
+                    <div style={{fontSize:'11px',color:'#64748b'}}>... Receipt Items ...</div>
+                    <div style={{borderTop:'1px dashed #ccc',margin:'8px 0'}}/>
+                    <div style={{fontSize:'11px',color:'#64748b'}}>{hospitalSettings.receipt_footer}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Printer Settings */}
+            {adminSettingsTab === 'printer_settings' && (
+              <div className="glass-card">
+                <h3 style={{marginBottom:'20px',display:'flex',alignItems:'center',gap:'8px'}}><Printer size={20}/> Printer Settings</h3>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'16px'}}>
+                  <div className="form-group">
+                    <label>Paper Size</label>
+                    <select className="input-field" value={hospitalSettings.paper_size||'A4'} onChange={e=>setHospitalSettings({...hospitalSettings,paper_size:e.target.value})}>
+                      <option value="A4">A4 (210 × 297 mm)</option>
+                      <option value="A5">A5 (148 × 210 mm)</option>
+                      <option value="Letter">Letter (216 × 279 mm)</option>
+                      <option value="Thermal80">Thermal 80mm</option>
+                      <option value="Thermal57">Thermal 57mm</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Font Size</label>
+                    <select className="input-field" value={hospitalSettings.font_size||'12'} onChange={e=>setHospitalSettings({...hospitalSettings,font_size:e.target.value})}>
+                      <option value="10">10px (Small)</option>
+                      <option value="12">12px (Normal)</option>
+                      <option value="14">14px (Large)</option>
+                      <option value="16">16px (Extra Large)</option>
+                    </select>
+                  </div>
+                </div>
+                <div style={{marginTop:'20px',padding:'16px',background:'rgba(139,92,246,0.05)',borderRadius:'8px',border:'1px solid rgba(139,92,246,0.2)'}}>
+                  <p style={{color:'#8b5cf6',margin:0,fontSize:'14px'}}>🖨️ Paper: <strong>{hospitalSettings.paper_size}</strong> | Font Size: <strong>{hospitalSettings.font_size}px</strong></p>
+                  <p style={{color:'var(--text-muted)',margin:'8px 0 0',fontSize:'12px'}}>These settings apply to all printed invoices, receipts, and reports.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Backup & Restore */}
+            {adminSettingsTab === 'backup' && (
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'16px'}}>
+                <div className="glass-card">
+                  <h3 style={{marginBottom:'16px',display:'flex',alignItems:'center',gap:'8px'}}><DownloadCloud size={20}/> Backup Database</h3>
+                  <p style={{color:'var(--text-muted)',marginBottom:'20px',fontSize:'14px',lineHeight:'1.6'}}>
+                    Download a complete backup of the hospital database including all patients, bills, inventory, and settings.
+                  </p>
+                  <div style={{background:'rgba(16,185,129,0.08)',borderRadius:'8px',padding:'16px',marginBottom:'20px',border:'1px solid rgba(16,185,129,0.2)'}}>
+                    <div style={{display:'flex',gap:'16px',flexWrap:'wrap'}}>
+                      <div style={{textAlign:'center'}}><div style={{fontSize:'24px',fontWeight:'bold',color:'#10b981'}}>{patients.length}</div><div style={{fontSize:'12px',color:'var(--text-muted)'}}>Patients</div></div>
+                      <div style={{textAlign:'center'}}><div style={{fontSize:'24px',fontWeight:'bold',color:'#3b82f6'}}>{pharmacyBills.length}</div><div style={{fontSize:'12px',color:'var(--text-muted)'}}>Pharmacy Bills</div></div>
+                      <div style={{textAlign:'center'}}><div style={{fontSize:'24px',fontWeight:'bold',color:'#8b5cf6'}}>{inventory.length}</div><div style={{fontSize:'12px',color:'var(--text-muted)'}}>Inventory Items</div></div>
+                    </div>
+                  </div>
+                  <button className="btn btn-primary" style={{display:'flex',alignItems:'center',gap:'8px',width:'100%',justifyContent:'center'}} onClick={handleBackupDatabase}>
+                    <DownloadCloud size={18}/> Download Backup (JSON)
+                  </button>
+                </div>
+                <div className="glass-card">
+                  <h3 style={{marginBottom:'16px',display:'flex',alignItems:'center',gap:'8px'}}><UploadCloud size={20}/> Restore Database</h3>
+                  <p style={{color:'var(--text-muted)',marginBottom:'20px',fontSize:'14px',lineHeight:'1.6'}}>
+                    Restore your database from a previously downloaded backup file. This will overwrite existing data.
+                  </p>
+                  <div style={{background:'rgba(244,63,94,0.08)',borderRadius:'8px',padding:'12px',marginBottom:'20px',border:'1px solid rgba(244,63,94,0.2)'}}>
+                    <p style={{color:'#f43f5e',margin:0,fontSize:'13px',display:'flex',alignItems:'center',gap:'6px'}}><AlertTriangle size={16}/> <strong>Warning:</strong> Restore will replace all current data. Backup first!</p>
+                  </div>
+                  <input type="file" accept=".json" className="input-field" onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (file) { alert(`File "${file.name}" selected. Restore functionality requires manual admin review.`); }
+                  }}/>
+                  <button className="btn" style={{marginTop:'12px',display:'flex',alignItems:'center',gap:'8px',width:'100%',justifyContent:'center',background:'rgba(244,63,94,0.1)',color:'#f43f5e',border:'1px solid rgba(244,63,94,0.3)'}}>
+                    <UploadCloud size={18}/> Restore from Backup
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Audit Logs */}
+            {adminSettingsTab === 'audit_logs' && (
+              <div className="glass-card">
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'20px'}}>
+                  <h3 style={{display:'flex',alignItems:'center',gap:'8px',margin:0}}><Shield size={20}/> Audit Logs</h3>
+                  <button className="btn" style={{display:'flex',alignItems:'center',gap:'6px',background:'rgba(59,130,246,0.1)',color:'#3b82f6',border:'1px solid rgba(59,130,246,0.2)'}} onClick={loadAuditLogs}>
+                    <RefreshCw size={16}/> Refresh
+                  </button>
+                </div>
+                <div className="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Timestamp</th>
+                        <th>User</th>
+                        <th>Action</th>
+                        <th>Details</th>
+                        <th>IP Address</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {auditLogs.length === 0 && (
+                        <tr><td colSpan={6} style={{textAlign:'center',color:'var(--text-muted)',padding:'32px'}}>
+                          <Clock size={32} style={{marginBottom:'8px',opacity:0.3}}/><br/>No audit logs yet. Actions will be logged here.
+                        </td></tr>
+                      )}
+                      {auditLogs.map((log: any) => (
+                        <tr key={log.id}>
+                          <td>{log.id}</td>
+                          <td style={{fontSize:'12px',color:'var(--text-muted)'}}>{new Date(log.timestamp).toLocaleString('en-IN')}</td>
+                          <td><strong>{log.username || 'System'}</strong></td>
+                          <td>
+                            <span style={{padding:'2px 10px',borderRadius:'12px',fontSize:'11px',fontWeight:'700',
+                              background: log.action.includes('DELETE')?'rgba(244,63,94,0.15)':log.action.includes('BACKUP')?'rgba(16,185,129,0.15)':'rgba(59,130,246,0.15)',
+                              color: log.action.includes('DELETE')?'#f43f5e':log.action.includes('BACKUP')?'#10b981':'#3b82f6'
+                            }}>{log.action}</span>
+                          </td>
+                          <td style={{fontSize:'12px'}}>{log.details}</td>
+                          <td style={{fontSize:'12px',color:'var(--text-muted)'}}>{log.ip_address||'-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+          </div>
+        )}
+
+      </div>
+
+      {/* Global Overlays */}
+      {globalLoading && (
+        <div style={{position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:9999, display:'flex', justifyContent:'center', alignItems:'center', backdropFilter:'blur(4px)'}}>
+          <div style={{background:'var(--bg-card)', padding:'24px', borderRadius:'12px', display:'flex', flexDirection:'column', alignItems:'center', gap:'12px', color:'var(--primary)'}}>
+            <Loader2 size={32} className="animate-spin" />
+            <span style={{fontWeight:'bold'}}>Processing...</span>
+          </div>
+        </div>
+      )}
+      {toast && (
+        <div style={{position:'fixed', bottom:'24px', right:'24px', zIndex:9999, background: toast.type === 'success' ? '#10b981' : '#ef4444', color:'#fff', padding:'12px 24px', borderRadius:'8px', display:'flex', alignItems:'center', gap:'8px', boxShadow:'0 4px 12px rgba(0,0,0,0.15)', animation:'slideIn 0.3s ease-out'}}>
+          {toast.type === 'success' ? <CheckCircle2 size={18}/> : <AlertTriangle size={18}/>}
+          <span style={{fontWeight:500}}>{toast.message}</span>
+        </div>
+      )}
+    </div>
+  );
+}
