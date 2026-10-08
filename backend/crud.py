@@ -273,10 +273,41 @@ def delete_op_token(db: Session, token_id: int):
 # ============================
 # Appointments
 # ============================
+def _assert_slot_free(
+    db: Session,
+    patient_id: int,
+    doctor_id: Optional[int],
+    appointment_date,
+    time_slot: Optional[str],
+    exclude_id: Optional[int] = None,
+) -> None:
+    """Reject a booking that clashes with the doctor's or the patient's active slots.
+
+    The portal already enforced this; staff bookings did not, so the front desk
+    could give one doctor two patients in the same slot.
+    """
+    if not appointment_date or not time_slot:
+        return
+    active = db.query(models.Appointment).filter(
+        models.Appointment.appointment_date == appointment_date,
+        models.Appointment.time_slot == time_slot,
+        models.Appointment.status.notin_(("Cancelled", "Completed")),
+    )
+    if exclude_id is not None:
+        active = active.filter(models.Appointment.id != exclude_id)
+    if doctor_id is not None and active.filter(models.Appointment.doctor_id == doctor_id).first():
+        raise HTTPException(status_code=409, detail="The doctor already has an appointment in that slot.")
+    if active.filter(models.Appointment.patient_id == patient_id).first():
+        raise HTTPException(status_code=409, detail="The patient already has an appointment in that slot.")
+
+
 def create_appointment(db: Session, appointment: schemas.AppointmentCreate):
     _require_patient(db, appointment.patient_id)
     if appointment.doctor_id is not None:
         _get_or_404(db, models.User, appointment.doctor_id, "Doctor")
+    _assert_slot_free(
+        db, appointment.patient_id, appointment.doctor_id, appointment.appointment_date, appointment.time_slot
+    )
     db_appointment = models.Appointment(**appointment.model_dump())
     db.add(db_appointment)
     db.commit()
@@ -300,7 +331,17 @@ def get_appointments(db: Session, target_date: Optional[date] = None, include_up
 
 def update_appointment(db: Session, appointment_id: int, payload: schemas.AppointmentUpdate):
     db_appointment = _get_or_404(db, models.Appointment, appointment_id, "Appointment")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if {"appointment_date", "time_slot", "doctor_id", "patient_id"} & data.keys():
+        _assert_slot_free(
+            db,
+            data.get("patient_id", db_appointment.patient_id),
+            data.get("doctor_id", db_appointment.doctor_id),
+            data.get("appointment_date", db_appointment.appointment_date),
+            data.get("time_slot", db_appointment.time_slot),
+            exclude_id=db_appointment.id,
+        )
+    for key, value in data.items():
         setattr(db_appointment, key, value)
     db.commit()
     db.refresh(db_appointment)
@@ -333,7 +374,9 @@ def delete_appointment(db: Session, appointment_id: int):
 def create_casesheet(db: Session, casesheet: schemas.CasesheetCreate):
     _require_patient(db, casesheet.patient_id)
     if casesheet.token_id is not None:
-        _get_or_404(db, models.OPToken, casesheet.token_id, "Token")
+        token = _get_or_404(db, models.OPToken, casesheet.token_id, "Token")
+        if token.patient_id != casesheet.patient_id:
+            raise HTTPException(status_code=422, detail="That OP token belongs to a different patient.")
 
     payload = casesheet.model_dump(exclude={"auto_order_labs"})
 
@@ -547,6 +590,11 @@ def create_pharmacy_bill(db: Session, bill: schemas.PharmacyBillCreate):
 
     for item in bill.items:
         db_item = _get_or_404(db, models.MedicineStock, item.medicine_id, "Medicine")
+        if db_item.expiry_date is not None and db_item.expiry_date < date.today():
+            raise HTTPException(
+                status_code=409,
+                detail=f"{db_item.name} expired on {db_item.expiry_date.isoformat()} and cannot be dispensed.",
+            )
         if db_item.quantity < item.quantity:
             raise HTTPException(
                 status_code=400,
@@ -1164,6 +1212,13 @@ def update_lab_bill_status(db: Session, bill_id: int, status: str):
             status_code=422, detail=f"Invalid lab bill status. Valid: {', '.join(constants.LAB_BILL_STATUSES)}"
         )
     db_bill = _get_or_404(db, models.LabBill, bill_id, "Lab bill")
+    if db_bill.status == "Cancelled" and status != "Cancelled":
+        # Its orders were released for re-billing; reviving it would bill them twice.
+        raise HTTPException(status_code=409, detail="A cancelled bill cannot be reopened. Raise a new bill instead.")
+    if status == "Cancelled":
+        db.query(models.LabOrder).filter(models.LabOrder.bill_id == db_bill.id).update(
+            {models.LabOrder.bill_id: None}, synchronize_session=False
+        )
     db_bill.status = status
     db.commit()
     db.refresh(db_bill)
@@ -1265,11 +1320,8 @@ def get_lab_stats(db: Session) -> dict:
         models.LabOrder.verified_at <= models.LabOrder.due_at,
     )
 
-    today_revenue = (
-        db.query(func.coalesce(func.sum(models.LabBill.total), 0.0))
-        .filter(models.LabBill.bill_date >= start, models.LabBill.bill_date <= end)
-        .scalar()
-        or 0.0
+    today_revenue = _sum_between(
+        db, models.LabBill.total, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS
     )
 
     return {
@@ -1311,6 +1363,13 @@ def get_lab_stats(db: Session) -> dict:
 # ============================
 def create_op_bill(db: Session, bill: schemas.OPBillCreate):
     _require_patient(db, bill.patient_id)
+    db_token = None
+    if bill.token_id:
+        db_token = _get_or_404(db, models.OPToken, bill.token_id, "Token")
+        if db_token.patient_id != bill.patient_id:
+            raise HTTPException(status_code=422, detail="That OP token belongs to a different patient.")
+        if db_token.is_billed:
+            raise HTTPException(status_code=409, detail="This OP token has already been billed.")
     other_total = sum(c.amount for c in bill.other_charges)
     subtotal = bill.consultation_fee + bill.lab_charges + bill.pharmacy_charges + other_total
     subtotal, _, _, total = _apply_percentage_totals(subtotal, bill.discount, bill.gst)
@@ -1323,10 +1382,8 @@ def create_op_bill(db: Session, bill: schemas.OPBillCreate):
     )
     db.add(db_bill)
 
-    if bill.token_id:
-        db_token = db.query(models.OPToken).filter(models.OPToken.id == bill.token_id).first()
-        if db_token:
-            db_token.is_billed = True
+    if db_token is not None:
+        db_token.is_billed = True
 
     db.commit()
     db.refresh(db_bill)
@@ -1784,6 +1841,16 @@ def create_ip_admission(
     marked Occupied with no admission would be permanently lost from the board.
     """
     _require_patient(db, admission.patient_id)
+    active = (
+        db.query(models.IPAdmission)
+        .filter(models.IPAdmission.patient_id == admission.patient_id, models.IPAdmission.status == "Admitted")
+        .first()
+    )
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This patient is already admitted (admission #{active.id}). Discharge or transfer them first.",
+        )
     if admission.attending_doctor_id is not None:
         _get_or_404(db, models.User, admission.attending_doctor_id, "Attending doctor")
     if admission.department_id is not None:
@@ -1854,6 +1921,34 @@ def get_ip_admission(db: Session, admission_id: int) -> models.IPAdmission:
     return _get_or_404(db, models.IPAdmission, admission_id, "IP admission")
 
 
+def billable_room_charge(admission: models.IPAdmission, days: int, end: datetime) -> float:
+    """Room charge for the whole stay, from every bed the patient occupied.
+
+    The previous figure was ``current bed rate x days``. After discharge there is
+    no current bed, so the charge became 0 exactly when the bill is raised, and a
+    transfer between beds of different rates was billed at the last rate only.
+    The billable day count is unchanged (at least one day); it is split across
+    beds in proportion to the time spent in each.
+    """
+    billable_days = max(days, 1)
+    spans = []
+    for allocation in admission.allocations or []:
+        if allocation.allocated_at is None:
+            continue
+        released = allocation.released_at or end
+        seconds = max((released - allocation.allocated_at).total_seconds(), 0.0)
+        spans.append((effective_bed_charge(allocation.bed), seconds))
+
+    if not spans:
+        return round(effective_bed_charge(admission.bed) * billable_days, 2)
+    total_seconds = sum(seconds for _, seconds in spans)
+    if total_seconds == 0:
+        # Every allocation opened and closed in the same instant: bill the last bed.
+        return round(spans[-1][0] * billable_days, 2)
+    weighted_rate = sum(rate * seconds for rate, seconds in spans) / total_seconds
+    return round(weighted_rate * billable_days, 2)
+
+
 def get_ip_admission_detail(db: Session, admission_id: int) -> dict:
     """Admission with its full clinical record, for the IPD workspace."""
     admission = (
@@ -1877,6 +1972,7 @@ def get_ip_admission_detail(db: Session, admission_id: int) -> dict:
 
     end = admission.discharge_date or _utcnow()
     days = max((end - admission.admission_date).days, 0) if admission.admission_date else 0
+    room_charge = billable_room_charge(admission, days, end)
 
     # ORM objects, not dicts: the response schema types them as real models so the
     # OpenAPI contract stays accurate.
@@ -1888,7 +1984,7 @@ def get_ip_admission_detail(db: Session, admission_id: int) -> dict:
         "medication_orders": admission.medication_orders,
         "discharge_summary": admission.discharge_summary,
         "length_of_stay_days": days,
-        "billable_room_charge": round(effective_bed_charge(admission.bed) * max(days, 1), 2),
+        "billable_room_charge": room_charge,
     }
 
 
@@ -2024,6 +2120,16 @@ def discharge_patient(
 
     _release_bed(db, admission, actor=actor, reason=f"Discharged ({payload.discharge_type})")
 
+    # Inpatient orders end with the stay; leaving them Active let the MAR record
+    # doses for a patient who had already gone home.
+    closed_at = _utcnow()
+    for order in admission.medication_orders or []:
+        if order.status in ("Active", "On Hold"):
+            order.status = "Stopped"
+            order.end_date = order.end_date or closed_at
+            if not order.stop_reason:
+                order.stop_reason = f"Patient discharged ({payload.discharge_type})"
+
     admission.status = {
         "Routine": "Discharged",
         "Transfer": "Transferred",
@@ -2062,13 +2168,15 @@ def update_ip_admission_status(
         raise HTTPException(
             status_code=409, detail=f"Illegal admission transition {db_admission.status} -> {status}."
         )
-    if status in constants.ADMISSION_TERMINAL_STATUSES and status != "Transferred":
-        _release_bed(db, db_admission, actor=None, reason=f"Status set to {status}")
-        db_admission.bed_id = None
+    if status in constants.ADMISSION_TERMINAL_STATUSES and status != db_admission.status:
+        raise HTTPException(
+            status_code=409,
+            detail="Use POST /ip-admissions/{id}/discharge to discharge, transfer out or record a death; "
+                  "it releases the bed, closes medication orders and enforces the discharge summary.",
+        )
     db_admission.status = status
-    if status in constants.ADMISSION_TERMINAL_STATUSES:
-        db_admission.discharge_date = discharge_date or db_admission.discharge_date or _utcnow()
-    elif discharge_date:
+    if discharge_date and db_admission.status in constants.ADMISSION_TERMINAL_STATUSES:
+        # Correcting the recorded date of an existing discharge is allowed.
         db_admission.discharge_date = discharge_date
     db.commit()
     db.refresh(db_admission)
@@ -2092,19 +2200,23 @@ def update_ip_admission(db: Session, admission_id: int, admission_update: schema
                 detail=f"Illegal admission transition {db_admission.status} -> {new_status}.",
             )
         if new_status in constants.ADMISSION_TERMINAL_STATUSES:
-            _release_bed(db, db_admission, actor=None, reason=f"Status set to {new_status}")
-            db_admission.bed_id = None
-            data.setdefault("discharge_date", _utcnow())
+            raise HTTPException(
+                status_code=409,
+                detail="Use POST /ip-admissions/{id}/discharge to discharge, transfer out or record a death; "
+                      "it releases the bed, closes medication orders and enforces the discharge summary.",
+            )
         db_admission.status = new_status
+
+    if data.get("discharge_date") and db_admission.status not in constants.ADMISSION_TERMINAL_STATUSES:
+        # Setting a discharge date is a discharge, which must go through /discharge.
+        raise HTTPException(
+            status_code=409,
+            detail="Use POST /ip-admissions/{id}/discharge to discharge, transfer out or record a death; "
+                  "it releases the bed, closes medication orders and enforces the discharge summary.",
+        )
 
     for key, value in data.items():
         setattr(db_admission, key, value)
-
-    if data.get("discharge_date") and db_admission.status not in constants.ADMISSION_TERMINAL_STATUSES:
-        # Setting a discharge date is a discharge; keep status consistent.
-        db_admission.status = "Discharged"
-        _release_bed(db, db_admission, actor=None, reason="Discharged")
-        db_admission.bed_id = None
 
     db.commit()
     db.refresh(db_admission)
@@ -2288,6 +2400,12 @@ def administer_medication(
     if order.status != "Active":
         raise HTTPException(
             status_code=409, detail=f"This order is {order.status.lower()} and cannot be administered."
+        )
+    owning_admission = _get_or_404(db, models.IPAdmission, order.admission_id, "IP admission")
+    if owning_admission.status != "Admitted":
+        raise HTTPException(
+            status_code=409,
+            detail=f"The patient is {owning_admission.status.lower()}; medication cannot be recorded.",
         )
 
     data = payload.model_dump()
@@ -2780,7 +2898,11 @@ def global_search(db: Session, query: str, limit_per_type: int = 8):
 # ============================
 # Reports
 # ============================
-def _sum_between(db: Session, amount_column, date_column, start: datetime, end: datetime) -> float:
+# A cancelled bill is not revenue (and is not counted as a bill raised).
+_LAB_BILL_COUNTS = (models.LabBill.status != "Cancelled",)
+
+
+def _sum_between(db: Session, amount_column, date_column, start: datetime, end: datetime, *filters) -> float:
     """Sum ``amount_column`` over rows where ``date_column`` falls in the window.
 
     The previous helper filtered on the *amount* column, so every revenue figure
@@ -2788,14 +2910,14 @@ def _sum_between(db: Session, amount_column, date_column, start: datetime, end: 
     """
     return float(
         db.query(func.coalesce(func.sum(amount_column), 0.0))
-        .filter(date_column >= start, date_column <= end)
+        .filter(date_column >= start, date_column <= end, *filters)
         .scalar()
         or 0.0
     )
 
 
-def _count_between(db: Session, model, column, start: datetime, end: datetime) -> int:
-    return int(db.query(func.count(model.id)).filter(column >= start, column <= end).scalar() or 0)
+def _count_between(db: Session, model, column, start: datetime, end: datetime, *filters) -> int:
+    return int(db.query(func.count(model.id)).filter(column >= start, column <= end, *filters).scalar() or 0)
 
 
 def get_daily_report(db: Session, report_date: date):
@@ -2804,13 +2926,13 @@ def get_daily_report(db: Session, report_date: date):
     op_revenue = _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end)
     ip_revenue = _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end)
     pharmacy_revenue = _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end)
-    lab_revenue = _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end)
+    lab_revenue = _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
 
     total_bills = (
         _count_between(db, models.OPBill, models.OPBill.bill_date, start, end)
         + _count_between(db, models.IPBill, models.IPBill.bill_date, start, end)
         + _count_between(db, models.PharmacyBill, models.PharmacyBill.bill_date, start, end)
-        + _count_between(db, models.LabBill, models.LabBill.bill_date, start, end)
+        + _count_between(db, models.LabBill, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
     )
     total_patients = (
         db.query(func.count(func.distinct(models.OPToken.patient_id)))
@@ -2858,12 +2980,12 @@ def get_yearly_report(db: Session, year: int):
         op_rev = _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end)
         ip_rev = _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end)
         ph_rev = _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end)
-        lab_rev = _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end)
+        lab_rev = _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
         bill_count = (
             _count_between(db, models.OPBill, models.OPBill.bill_date, start, end)
             + _count_between(db, models.IPBill, models.IPBill.bill_date, start, end)
             + _count_between(db, models.PharmacyBill, models.PharmacyBill.bill_date, start, end)
-            + _count_between(db, models.LabBill, models.LabBill.bill_date, start, end)
+            + _count_between(db, models.LabBill, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
         )
         monthly_data.append(
             {
@@ -3143,7 +3265,7 @@ def get_dashboard_stats(db: Session):
     start, end = _day_bounds(today)
 
     pharma_today = _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end)
-    lab_today = _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end)
+    lab_today = _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
     op_revenue = _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end)
     ip_revenue = _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end)
 
@@ -3185,7 +3307,7 @@ def get_dashboard_charts(db: Session):
             _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end)
             + _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end)
             + _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end)
-            + _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end)
+            + _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
         )
         daily_revenue.append({"label": day.strftime("%d %b"), "value": round(value, 2)})
 
@@ -3197,7 +3319,7 @@ def get_dashboard_charts(db: Session):
             _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end)
             + _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end)
             + _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end)
-            + _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end)
+            + _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
         )
         monthly_revenue.append({"label": label, "value": round(value, 2)})
         patient_growth.append(

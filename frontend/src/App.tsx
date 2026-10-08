@@ -5353,8 +5353,17 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                                 setBillingPatientId(adm.patient_id);
                                 setActiveTab('pharmacy');
                               }}>Pharmacy</button>
-                              <button className="btn btn-secondary" style={{padding:'4px 8px', fontSize:'12px'}} onClick={() => {
-                                setIpBillForm({...ipBillForm, patient_id: String(adm.patient_id), admission_id: String(adm.id), room_charge_per_day: adm.bed?.daily_charge ?? ipBillForm.room_charge_per_day});
+                              <button className="btn btn-secondary" style={{padding:'4px 8px', fontSize:'12px'}} onClick={async () => {
+                                // The server prices the whole stay (every bed, including after
+                                // discharge when there is no current bed); fall back to the bed rate.
+                                let roomPerDay = adm.bed?.daily_charge ?? ipBillForm.room_charge_per_day;
+                                let days = ipBillForm.days_stayed;
+                                try {
+                                  const res = await axios.get(`${API_BASE}/ip-admissions/${adm.id}/detail`);
+                                  days = Math.max(res.data.length_of_stay_days ?? 1, 1);
+                                  roomPerDay = Math.round((res.data.billable_room_charge / days) * 100) / 100;
+                                } catch (e) { /* keep the fallback */ }
+                                setIpBillForm({...ipBillForm, patient_id: String(adm.patient_id), admission_id: String(adm.id), room_charge_per_day: roomPerDay, days_stayed: days});
                                 setBillingTab('ip');
                                 setActiveTab('billing');
                               }}>IP Bill</button>
