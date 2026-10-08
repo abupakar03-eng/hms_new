@@ -16,19 +16,20 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from typing import List, Optional
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import auth, constants, crud, models, schemas, audit
+from . import auth, constants, crud, models, schemas, audit, logging_setup
 from .config import settings
 from .database import SessionLocal, engine, get_db, run_migrations
 from .migrations import run_alembic_upgrade
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging_setup.configure(settings.log_format, settings.log_level)
 logger = logging.getLogger("hospital_os")
 
 CORS_ORIGINS = settings.cors_origin_list
@@ -81,6 +82,7 @@ def _bootstrap_admin():
                     hashed_password=auth.get_password_hash(password),
                     role="Admin",
                     is_active=True,
+                    must_change_password=True,
                 )
             )
             db.commit()
@@ -269,6 +271,27 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Tag the request (and every log line it produces) with a correlation id."""
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = logging_setup.new_request_id(request.headers.get("X-Request-ID"))
+        token = logging_setup.request_id_var.set(request_id)
+        try:
+            try:
+                response = await call_next(request)
+            except Exception:
+                logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+                response = JSONResponse(
+                    status_code=500,
+                    content={"detail": f"Something went wrong. Reference: {request_id}"},
+                )
+            response.headers["X-Request-ID"] = request_id
+            return response
+        finally:
+            logging_setup.request_id_var.reset(token)
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start = time.time()
@@ -364,13 +387,14 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(AuditTrailMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(AuthGuardMiddleware)
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
-    expose_headers=["X-Process-Time"],
+    expose_headers=["X-Process-Time", "X-Request-ID"],
 )
 
 
@@ -378,8 +402,23 @@ app.add_middleware(
 # Health & auth
 # ============================
 @app.get("/health", tags=["system"])
-def health():
-    return {"status": "ok", "version": app.version}
+def health(response: Response):
+    """Liveness and readiness: 503 when the database cannot be reached."""
+    db_ok = True
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:  # pragma: no cover - depends on the database being down
+        logger.exception("Health check: database unreachable")
+        db_ok = False
+    if not db_ok:
+        response.status_code = 503
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "version": app.version,
+        "environment": settings.environment,
+        "database": "ok" if db_ok else "unreachable",
+    }
 
 
 @app.post("/login", response_model=schemas.Token, tags=["auth"])
@@ -438,6 +477,7 @@ def login_for_access_token(
         "refresh_token": refresh_token,
         "expires_in": auth.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         "role": user.role,
+        "must_change_password": bool(user.must_change_password),
     }
 
 
@@ -696,6 +736,7 @@ def change_my_password(
     auth.assert_password_strength(payload.new_password)
 
     current_user.hashed_password = auth.get_password_hash(payload.new_password)
+    current_user.must_change_password = False
     auth.mark_password_changed(current_user)
     db.add(
         models.AuditLog(
@@ -867,36 +908,12 @@ def update_patient_endpoint(
 @app.delete("/patients/{patient_id}", response_model=schemas.MessageResponse, tags=["patients"])
 def delete_patient_endpoint(
     patient_id: int,
-    force: bool = Query(False, description="Delete even when clinical records exist."),
+    force: bool = Query(False, description="Also remove OP tokens, appointments and unreported lab orders. "
+                                           "Clinical and billing history always blocks the delete."),
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.require_roles("Admin", "Receptionist")),
+    current_user: models.User = Depends(auth.require_roles("Admin")),
 ):
-    if crud.patient_has_records(db, patient_id) and not force:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Patient has clinical or billing records. Pass force=true to delete anyway "
-                "(this also removes dependent records)."
-            ),
-        )
-    if force:
-        for model, column in (
-            (models.LabReport, models.LabReport.patient_id),
-            (models.LabSample, None),
-            (models.LabOrder, models.LabOrder.patient_id),
-            (models.Casesheet, models.Casesheet.patient_id),
-            (models.OPToken, models.OPToken.patient_id),
-        ):
-            if model is models.LabSample:
-                order_ids = [o.id for o in db.query(models.LabOrder.id).filter(models.LabOrder.patient_id == patient_id)]
-                if order_ids:
-                    db.query(models.LabSample).filter(models.LabSample.order_id.in_(order_ids)).delete(
-                        synchronize_session=False
-                    )
-                continue
-            db.query(model).filter(column == patient_id).delete(synchronize_session=False)
-        db.commit()
-    crud.delete_patient(db, patient_id)
+    crud.delete_patient(db, patient_id, force=force)
     return {"message": "Patient deleted successfully"}
 
 

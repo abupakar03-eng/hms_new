@@ -19,6 +19,25 @@ SQLALCHEMY_DATABASE_URL = settings.resolved_database_url
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL, **settings.sqlalchemy_engine_options())
 
+if engine.dialect.name == "sqlite":
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_connection, _record):
+        """Make SQLite safe for a multi-user local deployment.
+
+        * WAL lets readers proceed while a bill is being written.
+        * busy_timeout waits for a lock instead of failing with "database is locked".
+        * foreign_keys is off by default in SQLite, so ForeignKey columns were
+          not enforced at all.
+        """
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Deterministic constraint names.

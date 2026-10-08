@@ -64,6 +64,9 @@ class User(Base):
     # Tokens issued before this instant are rejected, so a password change or
     # reset signs out every existing session (including refresh tokens).
     password_changed_at = Column(DateTime, nullable=True)
+    # Set for the bootstrap admin and after an admin reset: the user must choose
+    # their own password before doing anything else.
+    must_change_password = Column(Boolean, default=False, nullable=False)
 
     # Staff master (doctors, nurses, technicians, desk staff).
     employee_code = Column(String, unique=True, nullable=True, index=True)

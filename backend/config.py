@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     app_version: str = "3.1.0"
     environment: Literal["development", "staging", "production"] = "development"
     debug: bool = False
+    # "text" for a console, "json" for log collectors (one object per line).
+    log_format: Literal["text", "json"] = "text"
+    log_level: str = "INFO"
 
     # --- Database ----------------------------------------------------------
     # Empty means "use the local SQLite file"; set a full SQLAlchemy URL for

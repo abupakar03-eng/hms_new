@@ -34,6 +34,21 @@ def _month_bounds(year: int, month: int):
     return datetime(year, month, 1), datetime(year, month, last_day, 23, 59, 59, 999999)
 
 
+def _delete_or_409(db: Session, obj, referenced_detail: str):
+    """Delete ``obj``; if other records still point at it, refuse with 409.
+
+    SQLite now enforces foreign keys, so a delete that would orphan history
+    fails at flush instead of silently leaving dangling ids.
+    """
+    db.delete(obj)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=referenced_detail)
+    return obj
+
+
 def _get_or_404(db: Session, model, obj_id: int, label: str):
     obj = db.query(model).filter(model.id == obj_id).first()
     if obj is None:
@@ -104,15 +119,18 @@ def delete_user(db: Session, user_id: int, acting_user_id: Optional[int] = None)
         raise HTTPException(status_code=400, detail="You cannot delete your own account.")
     if db_user.role == "Admin" and count_active_admins(db, exclude_user_id=user_id) == 0:
         raise HTTPException(status_code=400, detail="Cannot delete the last active administrator.")
-    db.delete(db_user)
-    db.commit()
-    return db_user
+    return _delete_or_409(
+        db, db_user,
+        "This account appears on appointments, admissions or other records. Deactivate it instead.",
+    )
 
 
 def update_user_password(db: Session, user_id: int, hashed_password: str):
     db_user = _get_or_404(db, models.User, user_id, "User")
     db_user.hashed_password = hashed_password
     db_user.password_changed_at = _utcnow()
+    # An admin-chosen password is temporary; the user picks their own at next login.
+    db_user.must_change_password = True
     db.commit()
     db.refresh(db_user)
     return db_user
@@ -175,11 +193,54 @@ def update_patient(db: Session, patient_id: int, patient_update: schemas.Patient
     return db_patient
 
 
-def delete_patient(db: Session, patient_id: int):
+# Records that make a patient part of the medical/financial history. A patient
+# who has any of these is never deleted.
+_RETAINED_PATIENT_RECORDS = (
+    ("casesheets", models.Casesheet, models.Casesheet.patient_id),
+    ("admissions", models.IPAdmission, models.IPAdmission.patient_id),
+    ("OP bills", models.OPBill, models.OPBill.patient_id),
+    ("IP bills", models.IPBill, models.IPBill.patient_id),
+    ("pharmacy bills", models.PharmacyBill, models.PharmacyBill.patient_id),
+    ("lab bills", models.LabBill, models.LabBill.patient_id),
+    ("lab reports", models.LabReport, models.LabReport.patient_id),
+)
+
+
+def delete_patient(db: Session, patient_id: int, force: bool = False):
+    """Delete a patient registered by mistake.
+
+    Without ``force`` any linked record blocks the delete. With ``force`` the
+    front-desk leftovers of a mistaken registration (OP tokens, appointments,
+    unreported lab orders) are removed too; clinical and billing history never is.
+    """
     db_patient = _get_or_404(db, models.Patient, patient_id, "Patient")
-    db.delete(db_patient)
-    db.commit()
-    return db_patient
+    retained = [
+        label for label, model, column in _RETAINED_PATIENT_RECORDS
+        if db.query(model.id).filter(column == patient_id).first() is not None
+    ]
+    if retained:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This patient has {', '.join(retained)} that must be retained; the record cannot be deleted.",
+        )
+    if patient_has_records(db, patient_id) and not force:
+        raise HTTPException(
+            status_code=409,
+            detail="Patient has OP tokens, appointments or lab orders. Pass force=true to remove them with the patient.",
+        )
+    if force:
+        orders = db.query(models.LabOrder).filter(models.LabOrder.patient_id == patient_id).all()
+        for order in orders:
+            db.delete(order)  # samples cascade
+        db.query(models.Appointment).filter(models.Appointment.patient_id == patient_id).delete(
+            synchronize_session=False
+        )
+        db.query(models.OPToken).filter(models.OPToken.patient_id == patient_id).delete(synchronize_session=False)
+        db.query(models.User).filter(models.User.patient_id == patient_id).update(
+            {models.User.patient_id: None}, synchronize_session=False
+        )
+        db.flush()
+    return _delete_or_409(db, db_patient, "This patient is still referenced by other records.")
 
 
 def patient_has_records(db: Session, patient_id: int) -> bool:
@@ -265,9 +326,9 @@ def update_op_token_status(db: Session, token_id: int, status: str):
 
 def delete_op_token(db: Session, token_id: int):
     db_token = _get_or_404(db, models.OPToken, token_id, "Token")
-    db.delete(db_token)
-    db.commit()
-    return db_token
+    return _delete_or_409(
+        db, db_token, "This token has a casesheet or bill. Cancel the bill instead of deleting the token."
+    )
 
 
 # ============================
@@ -363,9 +424,7 @@ def update_appointment_status(db: Session, appointment_id: int, status: str):
 
 def delete_appointment(db: Session, appointment_id: int):
     db_appointment = _get_or_404(db, models.Appointment, appointment_id, "Appointment")
-    db.delete(db_appointment)
-    db.commit()
-    return db_appointment
+    return _delete_or_409(db, db_appointment, "This appointment is referenced by other records; cancel it instead.")
 
 
 # ============================
@@ -476,9 +535,7 @@ def update_casesheet(db: Session, casesheet_id: int, casesheet_update: schemas.C
 
 def delete_casesheet(db: Session, casesheet_id: int):
     db_casesheet = _get_or_404(db, models.Casesheet, casesheet_id, "Casesheet")
-    db.delete(db_casesheet)
-    db.commit()
-    return db_casesheet
+    return _delete_or_409(db, db_casesheet, "This casesheet is referenced by other records.")
 
 
 # ============================
@@ -585,12 +642,14 @@ def update_medicine_stock(db: Session, stock_id: int, stock_update: schemas.Medi
 
 def delete_medicine_stock(db: Session, stock_id: int):
     db_stock = _get_or_404(db, models.MedicineStock, stock_id, "Medicine stock")
+    # Sold lines keep their medicine name; movements keep their quantities.
     db.query(models.PharmacyBillItem).filter(models.PharmacyBillItem.medicine_id == stock_id).update(
         {models.PharmacyBillItem.medicine_id: None}, synchronize_session=False
     )
-    db.delete(db_stock)
-    db.commit()
-    return db_stock
+    db.query(models.StockTransaction).filter(models.StockTransaction.medicine_id == stock_id).update(
+        {models.StockTransaction.medicine_id: None}, synchronize_session=False
+    )
+    return _delete_or_409(db, db_stock, "This stock item is still referenced by other records.")
 
 
 def low_stock_items(db: Session):
@@ -1113,9 +1172,9 @@ def delete_lab_order(db: Session, order_id: int):
         raise HTTPException(
             status_code=409, detail="Cannot delete an order that already has a reported result."
         )
-    db.delete(db_order)
-    db.commit()
-    return db_order
+    if db_order.bill_id or db_order.ip_bill_id:
+        raise HTTPException(status_code=409, detail="This order is on a bill; cancel the bill first.")
+    return _delete_or_409(db, db_order, "This order is referenced by other records.")
 
 
 def submit_lab_results(db: Session, order_id: int, payload: schemas.LabResultSubmit, actor: str):
@@ -1278,9 +1337,7 @@ def update_lab_sample(db: Session, sample_id: int, sample_data: schemas.LabSampl
 
 def delete_lab_sample(db: Session, sample_id: int):
     db_sample = _get_or_404(db, models.LabSample, sample_id, "Lab sample")
-    db.delete(db_sample)
-    db.commit()
-    return db_sample
+    return _delete_or_409(db, db_sample, "This sample is referenced by other records.")
 
 
 # ============================
@@ -1475,9 +1532,7 @@ def delete_lab_report(db: Session, report_id: int):
     db_report = _get_or_404(db, models.LabReport, report_id, "Lab report")
     if db_report.status == "Verified":
         raise HTTPException(status_code=409, detail="A verified report cannot be deleted.")
-    db.delete(db_report)
-    db.commit()
-    return db_report
+    return _delete_or_409(db, db_report, "This report is referenced by other records.")
 
 
 # ============================

@@ -22,3 +22,6 @@ htmlcov/
 # Local env overrides
 frontend/.env
 frontend/.env.local
+
+# Local database backups (python -m backend.backup)
+backups/

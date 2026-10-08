@@ -82,6 +82,7 @@ class UserResponse(ORMModel):
     full_name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+    must_change_password: bool = False
 
 
 # ----------------- PATIENT SELF-REGISTRATION -----------------
@@ -133,6 +134,7 @@ class Token(BaseModel):
     refresh_token: Optional[str] = None
     expires_in: Optional[int] = None
     role: Optional[str] = None
+    must_change_password: bool = False
 
 
 class RefreshRequest(BaseModel):
