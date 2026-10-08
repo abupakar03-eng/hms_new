@@ -1,7 +1,11 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
-
+/*
+ * No remote webfont is loaded on purpose.
+ * A hospital workstation is often on an isolated network, and the Content-Security
+ * Policy blocks third-party stylesheets anyway. The system stack below renders
+ * identically offline and removes a network round-trip on first paint.
+ */
 :root {
-  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Plus Jakarta Sans", Roboto, Helvetica, Arial, sans-serif;
   
   /* Color Palette - Dark Slate & Premium Blue */
   --bg-app: #0b0f19;
@@ -17,6 +21,19 @@
   --accent-emerald: #10b981;
   --accent-amber: #f59e0b;
   --accent-rose: #f43f5e;
+
+  /*
+   * Semantic accents. These read well on the dark slate background, but the
+   * same values on white are only 2-3:1, so the light theme overrides them
+   * with darker steps below. Anything using these variables is legible in both.
+   */
+  --accent-blue: #3b82f6;
+  --accent-blue-soft: #60a5fa;
+  --accent-violet: #8b5cf6;
+  --accent-violet-soft: #a78bfa;
+  --accent-sky: #0ea5e9;
+  --accent-yellow: #eab308;
+  --accent-slate: #94a3b8;
   
   --text-primary: #f3f4f6;
   --text-secondary: #9ca3af;
@@ -41,10 +58,25 @@
   --bg-sidebar: #ffffff;
   --bg-card: #ffffff;
   --bg-card-hover: #f1f5f9;
-  
+
   --text-primary: #0f172a;
   --text-secondary: #475569;
-  --text-muted: #94a3b8;
+  /* slate-400 was only 2.6:1 on white — placeholders and small labels were
+     effectively unreadable. slate-500 clears WCAG AA at 4.6:1. */
+  --text-muted: #64748b;
+
+  /* Darker accent steps so coloured text stays readable on white (all >= 4.5:1). */
+  --accent-cyan: #0e7490;
+  --accent-emerald: #047857;
+  --accent-amber: #b45309;
+  --accent-rose: #e11d48;
+  --accent-blue: #2563eb;
+  --accent-blue-soft: #2563eb;
+  --accent-violet: #6d28d9;
+  --accent-violet-soft: #6d28d9;
+  --accent-sky: #0369a1;
+  --accent-yellow: #a16207;
+  --accent-slate: #64748b;
   
   --border: rgba(0, 0, 0, 0.08);
   --border-focus: rgba(59, 130, 246, 0.4);
@@ -52,6 +84,8 @@
   
   --bg-input: #ffffff;
   --input-border: rgba(0, 0, 0, 0.15);
+  /* Native date-picker glyph defaults to white; darken it for the light theme. */
+  --picker-filter: invert(0.55);
 }
 
 
@@ -151,7 +185,7 @@ body {
 .nav-item.active {
   background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(6, 182, 212, 0.05));
   border-color: rgba(59, 130, 246, 0.3);
-  color: #60a5fa;
+  color: var(--accent-blue-soft);
 }
 
 /* Main Content Area */
@@ -197,12 +231,34 @@ body {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
 }
 
+/* An invoice is a paper artifact: it must read as white paper on screen too,
+   whatever the app theme, so its fixed dark text stays legible in dark mode. */
+.print-bill-container {
+  background: #ffffff !important;
+  color: #111111 !important;
+  border: 1px solid #dddddd !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+
 /* Stat Grid */
-.stat-grid {
+.stat-grid,
+.dashboard-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 20px;
   margin-bottom: 32px;
+}
+
+/* Cards that carry a wide table need to span the full row. */
+.dashboard-grid > .glass-card {
+  grid-column: 1 / -1;
+}
+
+.dashboard-grid .stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
 }
 
 .stat-card {
@@ -260,6 +316,23 @@ input, select, textarea {
 input:focus, select:focus, textarea:focus {
   border-color: var(--border-focus);
   box-shadow: 0 0 0 3px var(--primary-glow);
+}
+
+/*
+ * Placeholders were never styled, so they fell back to the browser default,
+ * which is unreadable on one theme or the other. Pin them to the themed muted
+ * colour; `opacity: 1` stops Firefox dimming them further.
+ */
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+/* Native date/number pickers otherwise render dark-on-dark. */
+input[type='date']::-webkit-calendar-picker-indicator {
+  filter: var(--picker-filter, none);
+  cursor: pointer;
 }
 
 /* Buttons */
@@ -590,12 +663,12 @@ tr:hover td {
 .user-name {
   font-weight: 600;
   font-size: 14px;
-  color: #1e293b;
+  color: var(--text-primary);
 }
 
 .user-role {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-secondary);
 }
 
 .logout-btn {
@@ -785,12 +858,12 @@ tr:hover td {
 .user-name {
   font-weight: 600;
   font-size: 14px;
-  color: #1e293b;
+  color: var(--text-primary);
 }
 
 .user-role {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-secondary);
 }
 
 .logout-btn {

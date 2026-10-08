@@ -1,4 +1,4 @@
-﻿bin/
+bin/
 setup/
 setup_temp/
 frontend/node_modules/
@@ -8,3 +8,17 @@ frontend/dist/
 __pycache__/
 .env
 .vscode/
+hms_local.db
+
+# Locally generated JWT signing key (never commit)
+.secret_key
+
+# Test artefacts
+.pytest_cache/
+pytest-cache-files-*/
+.coverage
+htmlcov/
+
+# Local env overrides
+frontend/.env
+frontend/.env.local
