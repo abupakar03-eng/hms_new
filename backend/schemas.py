@@ -467,6 +467,7 @@ class PharmacyBillCreate(BaseModel):
 
 class PharmacyBillResponse(ORMModel):
     id: int
+    receipt_no: Optional[str] = None
     patient_id: Optional[int] = None
     patient_name: Optional[str] = None
     bill_date: datetime
@@ -522,6 +523,7 @@ class LabBillFromOrders(BaseModel):
 
 class LabBillResponse(ORMModel):
     id: int
+    receipt_no: Optional[str] = None
     patient_id: Optional[int] = None
     patient_name: Optional[str] = None
     bill_date: datetime
@@ -864,6 +866,7 @@ class OPBillCreate(BaseModel):
 
 class OPBillResponse(ORMModel):
     id: int
+    receipt_no: Optional[str] = None
     patient_id: int
     token_id: Optional[int] = None
     bill_date: datetime
@@ -913,6 +916,7 @@ class IPBillCreate(BaseModel):
 
 class IPBillResponse(ORMModel):
     id: int
+    receipt_no: Optional[str] = None
     patient_id: int
     admission_id: Optional[int] = None
     bill_date: datetime
@@ -1909,3 +1913,29 @@ class StaffMember(UserResponse):
     joining_date: Optional[date] = None
     consultation_fee: Optional[float] = None
     last_login_at: Optional[datetime] = None
+
+
+class DayCloseCreate(BaseModel):
+    date: date
+    counted_cash: float = Field(..., ge=0)
+    notes: Optional[str] = Field(None, max_length=1000)
+
+
+class DayCloseSummary(BaseModel):
+    date: str
+    by_mode: Dict[str, float]
+    by_source: Dict[str, float]
+    total_collected: float
+    refunds_due: float
+    expected_cash: float
+    receipts: int
+    closing: Optional[Dict[str, Any]] = None
+
+
+class Notification(BaseModel):
+    key: str
+    severity: Literal["error", "warning", "info"]
+    title: str
+    detail: str
+    tab: str
+    count: int

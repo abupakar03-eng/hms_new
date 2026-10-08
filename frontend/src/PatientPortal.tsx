@@ -7,6 +7,8 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { confirmDialog } from './ui/feedback';
+import { amountInWords, html, openPrintWindow, type SafeHtml } from './ui/print';
+import { downloadCsv, recordsToCsv } from './ui/csv';
 import {
   Activity, Calendar, Clipboard, Download, FileText, FlaskConical, Loader2, LogOut,
   Printer, Receipt, RefreshCw, Save, Shield, UserRound, X, CheckCircle2, AlertTriangle,
@@ -206,10 +208,9 @@ export default function PatientPortal({ user, onLogout, theme, onToggleTheme }: 
   };
 
   // ---- printing ----------------------------------------------------------
-  const printHtml = (title: string, inner: string) => {
-    const win = window.open('', '_blank', 'width=900,height=1000');
-    if (!win) return notify('Allow pop-ups to print.', 'err');
-    win.document.write(`<html><head><title>${title}</title><style>
+  // html`` escapes every value: these documents show patient-entered text and
+  // the print window runs on the app's origin.
+  const PORTAL_PRINT_CSS = `
       body{font-family:Arial,sans-serif;padding:28px;color:#111}
       .head{text-align:center;border-bottom:2px solid #1e40af;padding-bottom:10px;margin-bottom:16px}
       .head h1{margin:0;color:#1e40af;font-size:20px}
@@ -222,26 +223,27 @@ export default function PatientPortal({ user, onLogout, theme, onToggleTheme }: 
       h3{margin:14px 0 6px}
       .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px}
       .foot{margin-top:26px;font-size:11px;color:#888;text-align:center}
-      @media print{body{padding:8px}}
-    </style></head><body>
+      @media print{body{padding:8px}}`;
+
+  const printHtml = (title: string, inner: SafeHtml) => {
+    const ok = openPrintWindow(title, html`
       <div class="head"><h1>${HOSPITAL_NAME}</h1><p>Patient copy</p></div>
       ${inner}
-      <div class="foot">Computer-generated document. Please correlate clinically.</div>
-    </body></html>`);
-    win.document.close();
-    win.focus();
-    win.print();
+      <div class="foot">Computer-generated document. Please correlate clinically.</div>`, PORTAL_PRINT_CSS);
+    if (!ok) notify('Allow pop-ups to print.', 'err');
   };
 
+  const patientName = () => dashboard?.profile.name || user.full_name || user.username;
+
   const printReport = (r: LabReport) => {
-    const rows = (r.results || []).map(row => `
+    const rows = (r.results || []).map(row => html`
       <tr class="${flagIsAbnormal(row.flag) ? 'abnormal' : ''}">
         <td>${row.parameter}</td><td><b>${row.result ?? '-'}</b></td>
         <td>${row.unit || ''}</td><td>${row.range || ''}</td><td>${row.flag || ''}</td>
-      </tr>`).join('');
-    printHtml(`Lab Report ${r.id}`, `
+      </tr>`);
+    printHtml(`Lab Report ${r.id}`, html`
       <div class="meta">
-        <div><b>Patient:</b> ${dashboard?.profile.name || user.full_name || user.username}<br>
+        <div><b>Patient:</b> ${patientName()}<br>
              <b>Age / Gender:</b> ${dashboard?.profile.age ?? '-'} / ${dashboard?.profile.gender ?? '-'}</div>
         <div style="text-align:right"><b>Report No:</b> #${r.id}<br>
              <b>Date:</b> ${new Date(r.date_conducted).toLocaleString()}<br>
@@ -252,7 +254,7 @@ export default function PatientPortal({ user, onLogout, theme, onToggleTheme }: 
           ${r.is_abnormal ? 'ABNORMAL' : 'NORMAL'}</span></h3>
       <table><thead><tr><th>Parameter</th><th>Result</th><th>Unit</th><th>Reference</th><th>Flag</th></tr></thead>
       <tbody>${rows}</tbody></table>
-      ${r.interpretation ? `<p><b>Interpretation:</b> ${r.interpretation}</p>` : ''}
+      ${r.interpretation ? html`<p><b>Interpretation:</b> ${r.interpretation}</p>` : ''}
       <div class="meta" style="margin-top:20px">
         <div>Status: <b>${r.status}</b></div>
         <div style="text-align:right">Verified by: <b>${r.verified_by || '-'}</b></div>
@@ -263,58 +265,51 @@ export default function PatientPortal({ user, onLogout, theme, onToggleTheme }: 
     const meds = (p.medicines || []).map(m => {
       const timing = [m.timing_morning && 'Morning', m.timing_afternoon && 'Afternoon', m.timing_night && 'Night']
         .filter(Boolean).join(', ');
-      return `<tr><td>${m.name}</td><td>${m.quantity ?? '-'}</td><td>${m.duration || '-'}</td>
+      return html`<tr><td>${m.name}</td><td>${m.quantity ?? '-'}</td><td>${m.duration || '-'}</td>
               <td>${timing || m.dosage || '-'}${m.timing_relation ? ` (${m.timing_relation})` : ''}</td>
               <td>${m.instructions || '-'}</td></tr>`;
-    }).join('');
-    printHtml(`Prescription ${p.id}`, `
+    });
+    printHtml(`Prescription ${p.id}`, html`
       <div class="meta">
-        <div><b>Patient:</b> ${dashboard?.profile.name || user.full_name || user.username}<br>
+        <div><b>Patient:</b> ${patientName()}<br>
              <b>Age / Gender:</b> ${dashboard?.profile.age ?? '-'} / ${dashboard?.profile.gender ?? '-'}</div>
         <div style="text-align:right"><b>Date:</b> ${new Date(p.date).toLocaleDateString()}<br>
              <b>Doctor:</b> ${p.doctor_name || '-'}</div>
       </div>
-      ${p.diagnosis ? `<p><b>Diagnosis:</b> ${p.diagnosis}</p>` : ''}
-      ${p.symptoms ? `<p><b>Complaints:</b> ${p.symptoms}</p>` : ''}
+      ${p.diagnosis ? html`<p><b>Diagnosis:</b> ${p.diagnosis}</p>` : ''}
+      ${p.symptoms ? html`<p><b>Complaints:</b> ${p.symptoms}</p>` : ''}
       <h3>Medicines</h3>
       <table><thead><tr><th>Medicine</th><th>Qty</th><th>Duration</th><th>When</th><th>Notes</th></tr></thead>
-      <tbody>${meds || '<tr><td colspan="5">No medicines prescribed</td></tr>'}</tbody></table>
-      ${p.advised_labs?.length ? `<p><b>Advised tests:</b> ${p.advised_labs.join(', ')}</p>` : ''}
-      ${p.advice ? `<p><b>Advice:</b> ${p.advice}</p>` : ''}
-      ${p.follow_up_date ? `<p><b>Follow-up:</b> ${new Date(p.follow_up_date).toLocaleDateString()}</p>` : ''}`);
+      <tbody>${meds.length ? meds : html`<tr><td colspan="5">No medicines prescribed</td></tr>`}</tbody></table>
+      ${p.advised_labs?.length ? html`<p><b>Advised tests:</b> ${p.advised_labs.join(', ')}</p>` : ''}
+      ${p.advice ? html`<p><b>Advice:</b> ${p.advice}</p>` : ''}
+      ${p.follow_up_date ? html`<p><b>Follow-up:</b> ${new Date(p.follow_up_date).toLocaleDateString()}</p>` : ''}`);
   };
 
   const printBill = (b: Bill) => {
     const items = (b.items || [])
       .filter(i => (i.amount ?? 0) > 0 || i.name)
-      .map(i => `<tr><td>${i.name}</td><td>${i.quantity ?? ''}</td><td>${money(i.amount ?? 0)}</td></tr>`).join('');
-    printHtml(`${b.bill_type} Bill ${b.id}`, `
+      .map(i => html`<tr><td>${i.name}</td><td>${i.quantity ?? ''}</td><td>${money(i.amount ?? 0)}</td></tr>`);
+    printHtml(`${b.bill_type} Bill ${b.id}`, html`
       <div class="meta">
-        <div><b>Patient:</b> ${dashboard?.profile.name || user.full_name || user.username}</div>
-        <div style="text-align:right"><b>Bill No:</b> ${b.bill_type}-${b.id}<br>
+        <div><b>Patient:</b> ${patientName()}</div>
+        <div style="text-align:right"><b>Bill No:</b> ${(b as any).receipt_no || `${b.bill_type}-${b.id}`}<br>
              <b>Date:</b> ${new Date(b.bill_date).toLocaleString()}<br>
              <b>Payment:</b> ${b.payment_mode || '-'}</div>
       </div>
       <table><thead><tr><th>Description</th><th>Qty</th><th>Amount</th></tr></thead><tbody>${items}</tbody></table>
       <div style="text-align:right;margin-top:12px;font-size:13px">
         <p>Subtotal: ${money(b.subtotal)}</p>
-        ${b.discount ? `<p>Discount (${b.discount}%): -${money((b.discount / 100) * b.subtotal)}</p>` : ''}
-        ${b.gst ? `<p>GST (${b.gst}%): +${money((b.gst / 100) * (b.subtotal - (b.discount / 100) * b.subtotal))}</p>` : ''}
+        ${b.discount ? html`<p>Discount (${b.discount}%): -${money((b.discount / 100) * b.subtotal)}</p>` : ''}
+        ${b.gst ? html`<p>GST (${b.gst}%): +${money((b.gst / 100) * (b.subtotal - (b.discount / 100) * b.subtotal))}</p>` : ''}
         <p style="font-size:17px;font-weight:bold;color:#1e40af">Total: ${money(b.total)}</p>
+        <p style="font-style:italic">${amountInWords(b.total)}</p>
       </div>`);
   };
 
   const exportCsv = (rows: Record<string, any>[], filename: string) => {
     if (!rows.length) return notify('Nothing to export yet.', 'err');
-    const headers = Object.keys(rows[0]);
-    const csv = [
-      headers.join(','),
-      ...rows.map(r => headers.map(h => `"${String(r[h] ?? '').replace(/"/g, '""')}"`).join(',')),
-    ].join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    const a = document.createElement('a');
-    a.href = url; a.download = filename; a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(recordsToCsv(rows), filename);
   };
 
   const upcoming = useMemo(

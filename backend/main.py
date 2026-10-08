@@ -329,6 +329,7 @@ IPD_ADMIN = ("Admin",)
 ROLE_POLICY = (
     # path prefix, allowed roles, methods it applies to
     ("/users/me/password", None, {"POST"}),          # anyone may change their own password
+    ("/reports/day-close", ("Admin", "Billing"), {"POST"}),
     ("/patients", ADMIN, {"DELETE"}),
     ("/casesheets", ("Admin", "Doctor"), {"DELETE"}),
     ("/users", ADMIN, {"POST", "PUT", "PATCH", "DELETE"}),
@@ -1893,6 +1894,24 @@ def discharge_report(db: Session = Depends(get_db)):
 # ============================
 # Dashboard
 # ============================
+@app.get("/reports/day-close", response_model=schemas.DayCloseSummary, tags=["reports"])
+def day_close_summary_endpoint(day: date = Query(..., alias="date"), db: Session = Depends(get_db)):
+    """Collections for a day by payment mode and source, plus its closing if recorded."""
+    return crud.day_close_summary(db, day)
+
+
+@app.post("/reports/day-close", response_model=schemas.DayCloseSummary, tags=["reports"])
+def close_day_endpoint(payload: schemas.DayCloseCreate, request: Request, db: Session = Depends(get_db)):
+    return crud.close_day(db, payload, _actor(request))
+
+
+@app.get("/notifications", response_model=List[schemas.Notification], tags=["dashboard"])
+def notifications_endpoint(
+    db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)
+):
+    return crud.notifications_for(db, current_user)
+
+
 @app.get("/dashboard/stats", response_model=schemas.DashboardStats, tags=["dashboard"])
 def get_dashboard_stats(db: Session = Depends(get_db)):
     return crud.get_dashboard_stats(db)

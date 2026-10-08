@@ -13,6 +13,10 @@ import PatientPortal from './PatientPortal';
 import RoleFlow from './RoleFlow';
 import { API_BASE } from './api';
 import { useHashTab } from './routing';
+import { DayClosePanel } from './components/DayClosePanel';
+import { NotificationBell } from './components/NotificationBell';
+import { downloadCsv, recordsToCsv, toCsv } from './ui/csv';
+import { INVOICE_CSS, html, openPrintWindow, renderInvoice, type InvoiceKind } from './ui/print';
 import { selectStyles } from './ui/selectStyles';
 import { SearchableDropdown } from './components/SearchableDropdown';
 import { LabPatientHeader } from './components/LabPatientHeader';
@@ -68,17 +72,8 @@ export default function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   
   const exportToCSV = (data: any[], filename: string) => {
-    if(!data.length) return;
-    const headers = Object.keys(data[0]).join(',');
-    const rows = data.map(obj => Object.values(obj).map(v => `"${v}"`).join(',')).join('\n');
-    const csvContent = "data:text/csv;charset=utf-8," + headers + "\n" + rows;
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", filename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    if (!data.length) return notify.info('Nothing to export yet.');
+    downloadCsv(recordsToCsv(data), filename);
   };
 
   const [patientSearch, setPatientSearch] = useState("");
@@ -101,6 +96,9 @@ export default function App() {
   // A reload of a signed-in session keeps the screen in the URL; a fresh sign-in
   // goes to the role's home screen instead.
   const restoreScreenOnce = useRef(arrivedOnScreen && !!localStorage.getItem('token'));
+  // The user the home screen was chosen for. A silent token refresh re-runs the
+  // current-user effect; it must not throw the user back to their home screen.
+  const homedForUser = useRef<string | null>(null);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [tokens, setTokens] = useState<OPToken[]>([]);
   const [inventory, setInventory] = useState<MedicineStock[]>([]);
@@ -140,12 +138,15 @@ export default function App() {
   const [dashStats, setDashStats] = useState<any>(null);
   const [dashCharts, setDashCharts] = useState<any>(null);
   // Admin Settings
+  // Real values come from GET /hospital-settings/. The defaults used to be a
+  // made-up address and GSTIN, which then printed on every invoice.
   const [hospitalSettings, setHospitalSettings] = useState<Record<string,string>>({
-    hospital_name: 'MedBill Pro Hospital',
-    gst_number: '33AAAAA0000A1Z5',
-    address: '123 Healthcare Street, Chennai - 600001',
-    contact: '+91 99999 99999',
-    email: 'info@medbillpro.com',
+    hospital_name: '',
+    gst_number: '',
+    address: '',
+    contact: '',
+    email: '',
+    sac_code: '999311',
     receipt_header: 'Thank you for visiting our hospital',
     receipt_footer: 'Get well soon! This is a computer generated receipt.',
     paper_size: 'A4',
@@ -334,6 +335,8 @@ export default function App() {
         .then(res => {
           setCurrentUser(res.data);
           const role = res.data.role;
+          if (homedForUser.current === res.data.username) return;
+          homedForUser.current = res.data.username;
           if (restoreScreenOnce.current) { restoreScreenOnce.current = false; return; }
           // A patient account never renders the staff shell; PatientPortal is
           // returned instead (see the render guard below).
@@ -362,6 +365,7 @@ export default function App() {
     }
     setToken(null);
     setCurrentUser(null);
+    homedForUser.current = null;
     localStorage.removeItem('token');
     localStorage.removeItem('refresh_token');
     axios.defaults.headers.common['Authorization'] = '';
@@ -1366,15 +1370,9 @@ export default function App() {
   const exportTableToCSV = (tableId: string, filename: string) => {
     const table = document.getElementById(tableId);
     if (!table) return;
-    const rows = Array.from(table.querySelectorAll('tr'));
-    const csvContent = rows.map(row => 
-      Array.from(row.querySelectorAll('th, td')).map(cell => `"${cell.textContent}"`).join(',')
-    ).join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename; a.click();
-    URL.revokeObjectURL(url);
+    const rows = Array.from(table.querySelectorAll('tr')).map(row =>
+      Array.from(row.querySelectorAll('th, td')).map(c => (c.textContent || '').trim()));
+    downloadCsv(toCsv(rows), filename);
   };
 
   const printSection = (sectionId: string) => {
@@ -1388,60 +1386,12 @@ export default function App() {
   };
 
   // GST Invoice Print
-  const printInvoice = (bill: any, billType: string) => {
-    const patient = patients.find(p => p.id === bill.patient_id);
-    const dateStr = new Date(bill.bill_date).toLocaleDateString('en-IN');
-    let rows = '';
-    if (billType === 'op') {
-      if (bill.consultation_fee) rows += `<tr><td>Consultation Fee</td><td>Dr. ${bill.doctor_name || ''}</td><td>₹${bill.consultation_fee.toFixed(2)}</td></tr>`;
-      if (bill.lab_charges) rows += `<tr><td>Lab Charges</td><td></td><td>₹${bill.lab_charges.toFixed(2)}</td></tr>`;
-      if (bill.pharmacy_charges) rows += `<tr><td>Pharmacy Charges</td><td></td><td>₹${bill.pharmacy_charges.toFixed(2)}</td></tr>`;
-      (bill.other_charges || []).forEach((c: any) => { rows += `<tr><td>${c.name}</td><td></td><td>₹${c.amount.toFixed(2)}</td></tr>`; });
-    } else if (billType === 'ip') {
-      if (bill.room_charges) rows += `<tr><td>Room Charges (${bill.days_stayed} days × ₹${bill.room_charge_per_day})</td><td></td><td>₹${bill.room_charges.toFixed(2)}</td></tr>`;
-      if (bill.doctor_charges) rows += `<tr><td>Doctor Charges</td><td>Dr. ${bill.doctor_name || ''}</td><td>₹${bill.doctor_charges.toFixed(2)}</td></tr>`;
-      if (bill.nursing_charges) rows += `<tr><td>Nursing Charges</td><td></td><td>₹${bill.nursing_charges.toFixed(2)}</td></tr>`;
-      if (bill.pharmacy_charges) rows += `<tr><td>Pharmacy Charges</td><td></td><td>₹${bill.pharmacy_charges.toFixed(2)}</td></tr>`;
-      if (bill.lab_charges) rows += `<tr><td>Lab Charges</td><td></td><td>₹${bill.lab_charges.toFixed(2)}</td></tr>`;
-      (bill.other_charges || []).forEach((c: any) => { rows += `<tr><td>${c.name}</td><td></td><td>₹${c.amount.toFixed(2)}</td></tr>`; });
-    } else {
-      (bill.items || []).forEach((item: any) => { rows += `<tr><td>${item.medicine_name}</td><td>${item.quantity} units × ₹${item.unit_price}</td><td>₹${item.total_price.toFixed(2)}</td></tr>`; });
-    }
-    const html = `<html><head><title>GST Invoice</title><style>
-      body{font-family:Arial,sans-serif;padding:30px;color:#000}
-      .header{text-align:center;margin-bottom:20px}
-      .header h1{color:#1e40af;font-size:22px;margin:0}
-      .header p{margin:4px 0;color:#555}
-      .invoice-meta{display:flex;justify-content:space-between;margin:20px 0;font-size:13px}
-      table{width:100%;border-collapse:collapse;margin:15px 0}
-      th{background:#1e40af;color:#fff;padding:8px;text-align:left}
-      td{padding:8px;border-bottom:1px solid #eee}
-      .totals{text-align:right;margin-top:10px}
-      .totals p{margin:4px 0}
-      .total-final{font-size:18px;font-weight:bold;color:#1e40af;margin-top:8px}
-      .footer{margin-top:30px;text-align:center;color:#888;font-size:12px}
-      @media print{body{padding:10px}}
-    </style></head><body>
-      <div class="header"><h1>🏥 MEDBILL PRO HOSPITAL</h1><p>123 Healthcare Street, Chennai - 600001 | GST: 33AAAAA0000A1Z5</p><p>Phone: +91 99999 99999 | Email: info@medbillpro.com</p></div>
-      <h2 style="text-align:center;color:#1e40af">${billType === 'op' ? 'OP' : billType === 'ip' ? 'IP' : 'Pharmacy'} GST Invoice</h2>
-      <div class="invoice-meta">
-        <div><b>Patient:</b> ${patient?.name || bill.patient_name || 'Walk-in'}<br><b>Age/Gender:</b> ${patient?.age || '-'}/${patient?.gender || '-'}<br><b>Phone:</b> ${patient?.phone || '-'}</div>
-        <div style="text-align:right"><b>Bill No:</b> #${bill.id}<br><b>Date:</b> ${dateStr}<br><b>Payment:</b> ${bill.payment_mode}</div>
-      </div>
-      <table><thead><tr><th>Description</th><th>Details</th><th>Amount</th></tr></thead><tbody>${rows}</tbody></table>
-      <div class="totals">
-        <p>Subtotal: ₹${bill.subtotal?.toFixed(2)}</p>
-        <p>Discount (${bill.discount}%): -₹${((bill.discount/100)*bill.subtotal).toFixed(2)}</p>
-        <p>GST (${bill.gst}%): +₹${((bill.gst/100)*(bill.subtotal-(bill.discount/100)*bill.subtotal)).toFixed(2)}</p>
-        <p class="total-final">Total: ₹${bill.total?.toFixed(2)}</p>
-      </div>
-      <div class="footer">Thank you for choosing MEDBILL PRO Hospital. Get well soon!<br>This is a computer-generated invoice.</div>
-    </body></html>`;
-    const win = window.open('', '_blank');
-    if (!win) return;
-    win.document.write(html);
-    win.document.close();
-    win.print();
+  /** GST invoice with receipt number, tax split and amount in words (ui/print.ts). */
+  const printInvoice = (bill: any, kind: InvoiceKind) => {
+    const patient = patients.find(p => p.id === bill.patient_id) || bill.patient || null;
+    const ok = openPrintWindow(`${bill.receipt_no || 'Bill ' + bill.id}`,
+      renderInvoice({ kind, bill, patient, settings: hospitalSettings }), INVOICE_CSS);
+    if (!ok) notify.warning('Allow pop-ups for this site to print invoices.');
   };
 
   // Handle IP Admission
@@ -1724,18 +1674,18 @@ export default function App() {
     const settings = hospitalSettings;
 
     const bodyRows = rows.length
-      ? rows.map(r => `
+      ? rows.map(r => html`
           <tr class="${isFlagAbnormal(r.flag) ? 'abnormal' : ''}">
             <td>${r.parameter}</td>
             <td><b>${r.result ?? '-'}</b></td>
             <td>${r.unit || ''}</td>
             <td>${r.range || ''}</td>
             <td>${r.flag || ''}</td>
-          </tr>`).join('')
-      : `<tr><td>${report.test_name}</td><td><b>${report.result_value || '-'}</b></td><td>${report.units || ''}</td><td>${report.normal_range || ''}</td><td>-</td></tr>`;
+          </tr>`)
+      : html`<tr><td>${report.test_name}</td><td><b>${report.result_value || '-'}</b></td><td>${report.units || ''}</td><td>${report.normal_range || ''}</td><td>-</td></tr>`;
 
     const order = labOrders.find(o => o.id === report.order_id);
-    const html = `<html><head><title>Lab Report ${report.id}</title><style>
+    const css = `
       body{font-family:Arial,sans-serif;padding:28px;color:#111}
       .head{text-align:center;border-bottom:2px solid #1e40af;padding-bottom:10px;margin-bottom:16px}
       .head h1{margin:0;color:#1e40af;font-size:20px}
@@ -1748,7 +1698,8 @@ export default function App() {
       .foot{margin-top:26px;display:flex;justify-content:space-between;font-size:12px;color:#555}
       .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#dcfce7;color:#166534}
       @media print{body{padding:8px}}
-    </style></head><body>
+    `;
+    const doc = html`
       <div class="head">
         <h1>${settings.hospital_name || 'MedBill Pro Hospital'}</h1>
         <p>${settings.address || ''}</p>
@@ -1770,29 +1721,23 @@ export default function App() {
         </div>
       </div>
       <p style="font-size:13px"><b>Test:</b> ${report.test_name}
-        ${report.is_abnormal ? '<span class="badge" style="background:#fee2e2;color:#991b1b;margin-left:8px">ABNORMAL</span>' : '<span class="badge" style="margin-left:8px">NORMAL</span>'}
+        ${report.is_abnormal ? html`<span class="badge" style="background:#fee2e2;color:#991b1b;margin-left:8px">ABNORMAL</span>` : html`<span class="badge" style="margin-left:8px">NORMAL</span>`}
       </p>
       <table>
         <thead><tr><th>Parameter</th><th>Result</th><th>Unit</th><th>Reference Range</th><th>Flag</th></tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
-      ${report.interpretation ? `<p style="margin-top:14px;font-size:13px"><b>Interpretation:</b> ${report.interpretation}</p>` : ''}
-      ${report.remarks ? `<p style="font-size:13px"><b>Remarks:</b> ${report.remarks}</p>` : ''}
+      ${report.interpretation ? html`<p style="margin-top:14px;font-size:13px"><b>Interpretation:</b> ${report.interpretation}</p>` : ''}
+      ${report.remarks ? html`<p style="font-size:13px"><b>Remarks:</b> ${report.remarks}</p>` : ''}
       <div class="foot">
         <div>Reported by: <b>${report.reported_by || '-'}</b><br>Status: ${report.status || 'Final'}</div>
         <div style="text-align:right">Verified by: <b>${report.verified_by || '-'}</b><br>${report.verified_at ? new Date(report.verified_at).toLocaleString() : ''}</div>
       </div>
       <p style="margin-top:30px;text-align:center;font-size:11px;color:#888">
         This is a computer-generated report. Please correlate clinically.
-      </p>
-    </body></html>`;
+      </p>`;
 
-    const win = window.open('', '_blank', 'width=900,height=1000');
-    if (!win) return notify.warning('Please allow pop-ups to print the report.');
-    win.document.write(html);
-    win.document.close();
-    win.focus();
-    win.print();
+    if (!openPrintWindow(`Lab Report ${report.id}`, doc, css)) notify.warning('Please allow pop-ups to print the report.');
   };
 
   const exportLabOrdersCsv = () => {
@@ -2541,6 +2486,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
         <div className="top-navbar no-print" style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 24px', background:'var(--bg-card)', borderBottom:'1px solid var(--border)', marginBottom:'24px', position:'sticky', top:0, zIndex:90}}>
           <div style={{fontWeight:600, fontSize:'16px'}}>Welcome back, {currentUser.username}!</div>
           <div style={{display:'flex', gap:'12px', alignItems:'center'}}>
+            <NotificationBell onOpen={tab => setActiveTab(tab)} />
             <button onClick={() => { setPasswordForm({ current: '', next: '', confirm: '' }); setIsPasswordModalOpen(true); }} className="btn btn-secondary" style={{display:'flex', alignItems:'center', gap:'6px'}} title="Change my password">
               <Shield size={16}/> Change password
             </button>
@@ -4563,7 +4509,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                 <button className="btn btn-secondary no-print" onClick={() => setViewInvoice(null)} style={{ marginBottom: '20px' }}>
                   ← Back to Report
                 </button>
-                <button className="btn btn-primary no-print" onClick={() => window.print()} style={{ marginBottom: '20px', marginLeft: '12px' }}>
+                <button className="btn btn-primary no-print" onClick={() => printInvoice(viewInvoice, 'pharmacy')} style={{ marginBottom: '20px', marginLeft: '12px' }}>
                   <Printer size={16} /> Print Invoice
                 </button>
 
@@ -6844,7 +6790,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                         const pat = patients.find(p => p.id === b.patient_id);
                         return (
                           <tr key={b.id}>
-                            <td>#{b.id}</td>
+                            <td title={`Bill #${b.id}`}>{b.receipt_no || `#${b.id}`}</td>
                             <td>{pat?.name || `Patient #${b.patient_id}`}</td>
                             <td>{b.doctor_name || '-'}</td>
                             <td>{new Date(b.bill_date).toLocaleDateString('en-IN')}</td>
@@ -6875,7 +6821,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                         const pat = patients.find(p => p.id === b.patient_id);
                         return (
                           <tr key={b.id}>
-                            <td>#{b.id}</td>
+                            <td title={`Bill #${b.id}`}>{b.receipt_no || `#${b.id}`}</td>
                             <td>{pat?.name || `Patient #${b.patient_id}`}</td>
                             <td>{b.doctor_name || '-'}</td>
                             <td>{b.days_stayed}</td>
@@ -6912,7 +6858,8 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                 {key:'daily', label:'📅 Daily'}, {key:'monthly', label:'📆 Monthly'}, {key:'yearly', label:'📊 Yearly'},
                 {key:'revenue', label:'💰 Revenue'}, {key:'doctor', label:'👨‍⚕️ Doctor Wise'}, {key:'medicine', label:'💊 Medicine Sales'},
                 {key:'department', label:'🏢 Department Wise'}, {key:'patient', label:'🧑‍⚕️ Patient History'},
-                {key:'stock', label:'📦 Stock Valuation'}, {key:'lab', label:'🔬 Lab Summary'}, {key:'discharge', label:'🏥 Discharge'}
+                {key:'stock', label:'📦 Stock Valuation'}, {key:'lab', label:'🔬 Lab Summary'}, {key:'discharge', label:'🏥 Discharge'},
+                {key:'dayclose', label:'🔒 Day Closing'}
               ].map(r => (
                 <button key={r.key} onClick={() => { 
                   setReportType(r.key); 
@@ -6937,6 +6884,12 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
             </div>
 
             {/* Daily Report */}
+            {reportType === 'dayclose' && (
+              <div style={{ padding: '0 24px 24px' }}>
+                <DayClosePanel canClose={['Admin', 'Billing'].includes(currentUser.role)} hospitalName={hospitalSettings.hospital_name} />
+              </div>
+            )}
+
             {reportType === 'daily' && (
               <div>
                 <div style={{display:'flex', gap:'12px', alignItems:'center', padding:'0 24px 16px'}} className="no-print">
@@ -7446,6 +7399,20 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                     <label>Email</label>
                     <input className="input-field" type="email" value={hospitalSettings.email||''} onChange={e=>setHospitalSettings({...hospitalSettings,email:e.target.value})} placeholder="info@hospital.com"/>
                   </div>
+                  <div className="form-group">
+                    <label>SAC code (services)</label>
+                    <input className="input-field" value={hospitalSettings.sac_code||''} onChange={e=>setHospitalSettings({...hospitalSettings,sac_code:e.target.value})} placeholder="999311"/>
+                  </div>
+                  <div className="form-group">
+                    <label>Invoice footer</label>
+                    <input className="input-field" value={hospitalSettings.receipt_footer||''} onChange={e=>setHospitalSettings({...hospitalSettings,receipt_footer:e.target.value})} placeholder="Thank you. Get well soon."/>
+                  </div>
+                  <div className="form-group">
+                    <label style={{display:'flex', alignItems:'center', gap:'8px'}}>
+                      <input type="checkbox" checked={hospitalSettings.gst_interstate === 'true'} onChange={e=>setHospitalSettings({...hospitalSettings,gst_interstate:String(e.target.checked)})}/>
+                      Inter-state supply (print IGST instead of CGST + SGST)
+                    </label>
+                  </div>
                 </div>
                 <div style={{marginTop:'20px',padding:'16px',background:'rgba(59,130,246,0.05)',borderRadius:'8px',border:'1px solid rgba(59,130,246,0.2)'}}>
                   <h4 style={{marginBottom:'12px',color:'var(--accent-blue)'}}>Preview (GST Invoice Header)</h4>
@@ -7745,10 +7712,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                         </div>
                         <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '12px' }}
                           onClick={() => {
-                            const w = window.open('', '_blank');
-                            if (!w) return;
-                            w.document.write(`<html><head><title>Prescription ${s.id}</title><style>body{font-family:Arial;padding:24px}table{width:100%;border-collapse:collapse;font-size:13px}th{background:#1e40af;color:#fff;padding:6px;text-align:left}td{padding:6px;border-bottom:1px solid #ddd}</style></head><body><h2>Prescription #${s.id}</h2><p><b>Patient:</b> ${patientDetail.patient?.name} &nbsp; <b>Date:</b> ${new Date(s.date).toLocaleDateString()} &nbsp; <b>Doctor:</b> ${s.doctor_name || '-'}</p>${s.diagnosis ? `<p><b>Diagnosis:</b> ${s.diagnosis}</p>` : ''}<table><thead><tr><th>Medicine</th><th>Qty</th><th>Duration</th><th>Instructions</th></tr></thead><tbody>${(s.prescribed_medicines || []).map((m: any) => `<tr><td>${m.name}</td><td>${m.quantity ?? ''}</td><td>${m.duration || ''}</td><td>${m.instructions || ''}</td></tr>`).join('')}</tbody></table>${s.advice ? `<p><b>Advice:</b> ${s.advice}</p>` : ''}</body></html>`);
-                            w.document.close(); w.print();
+                            openPrintWindow(`Prescription ${s.id}`, html`<h2>Prescription #${s.id}</h2><p><b>Patient:</b> ${patientDetail.patient?.name} &nbsp; <b>Date:</b> ${new Date(s.date).toLocaleDateString()} &nbsp; <b>Doctor:</b> ${s.doctor_name || '-'}</p>${s.diagnosis ? html`<p><b>Diagnosis:</b> ${s.diagnosis}</p>` : ''}<table><thead><tr><th>Medicine</th><th>Qty</th><th>Duration</th><th>Instructions</th></tr></thead><tbody>${(s.prescribed_medicines || []).map((m: any) => html`<tr><td>${m.name}</td><td>${m.quantity ?? ''}</td><td>${m.duration || ''}</td><td>${m.instructions || ''}</td></tr>`)}</tbody></table>${s.advice ? html`<p><b>Advice:</b> ${s.advice}</p>` : ''}`, `body{font-family:Arial;padding:24px}table{width:100%;border-collapse:collapse;font-size:13px}th{background:#1e40af;color:#fff;padding:6px;text-align:left}td{padding:6px;border-bottom:1px solid #ddd}`);
                           }}><Printer size={13} /> Print</button>
                       </div>
                       {(s.prescribed_medicines || []).length > 0 && (
@@ -7806,7 +7770,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                             ].map((b: any) => (
                               <tr key={`${b._t}-${b.id}`}>
                                 <td>{b._t}</td>
-                                <td>#{b.id}</td>
+                                <td>{b.receipt_no || `#${b.id}`}</td>
                                 <td>{new Date(b.bill_date).toLocaleDateString()}</td>
                                 <td><b>₹{b.total?.toFixed(2)}</b></td>
                                 <td>{b.status || 'Paid'}</td>
@@ -8163,17 +8127,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                             const s = admissionDetail.discharge_summary;
                             if (!s) return showToast('Save the summary first', 'error');
                             const p = admissionDetail.patient || {};
-                            const w = window.open('', '_blank');
-                            if (!w) return;
-                            w.document.write(`<html><head><title>Discharge Summary ${s.id}</title><style>
-                              body{font-family:Arial;padding:28px;color:#111}
-                              .head{text-align:center;border-bottom:2px solid #1e40af;padding-bottom:10px;margin-bottom:16px}
-                              .head h1{margin:0;color:#1e40af;font-size:20px}
-                              h3{margin:16px 0 4px;font-size:14px;color:#1e40af}
-                              p{margin:2px 0;font-size:13px}
-                              .grid{display:flex;justify-content:space-between;font-size:13px;margin-bottom:12px}
-                              @media print{body{padding:8px}}
-                            </style></head><body>
+                            openPrintWindow(`Discharge Summary ${s.id}`, html`
                               <div class="head"><h1>${hospitalSettings.hospital_name || 'MedBill Pro Hospital'}</h1>
                               <p>${hospitalSettings.address || ''}</p></div>
                               <h2 style="text-align:center;margin:6px 0 14px">DISCHARGE SUMMARY</h2>
@@ -8189,15 +8143,21 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                               <h3>Procedures performed</h3><p>${s.procedures_performed || '—'}</p>
                               <h3>Investigations</h3><p>${s.investigations || '—'}</p>
                               <h3>Condition at discharge</h3><p>${s.condition_at_discharge || '—'}</p>
-                              <h3>Medication on discharge</h3><p>${(s.medication_summary || '—').replace(/\\n/g, '<br>')}</p>
+                              <h3>Medication on discharge</h3><p>${(s.medication_summary || '—').split('\n').map((line: string) => html`${line}<br>`)}</p>
                               <h3>Diet &amp; activity</h3><p>${s.diet_advice || '—'}<br>${s.activity_advice || '—'}</p>
                               <h3>Follow-up</h3><p>${s.follow_up_instructions || '—'}${s.follow_up_date ? ' — on ' + new Date(s.follow_up_date).toLocaleDateString() : ''}</p>
                               <div class="grid" style="margin-top:26px">
                                 <div>Prepared by: <b>${s.prepared_by || '—'}</b></div>
                                 <div style="text-align:right">Approved by: <b>${s.approved_by || '—'}</b></div>
-                              </div>
-                            </body></html>`);
-                            w.document.close(); w.focus(); w.print();
+                              </div>`, `
+                              body{font-family:Arial;padding:28px;color:#111}
+                              .head{text-align:center;border-bottom:2px solid #1e40af;padding-bottom:10px;margin-bottom:16px}
+                              .head h1{margin:0;color:#1e40af;font-size:20px}
+                              h3{margin:16px 0 4px;font-size:14px;color:#1e40af}
+                              p{margin:2px 0;font-size:13px}
+                              .grid{display:flex;justify-content:space-between;font-size:13px;margin-bottom:12px}
+                              @media print{body{padding:8px}}
+                            `);
                           }}><Printer size={16} /> Print / Save PDF</button>
                         </div>
                       </>

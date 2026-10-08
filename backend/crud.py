@@ -49,6 +49,49 @@ def _delete_or_409(db: Session, obj, referenced_detail: str):
     return obj
 
 
+# ============================
+# Receipt numbering
+# ============================
+RECEIPT_SERIES = {"OPBill": "OP", "IPBill": "IP", "PharmacyBill": "PH", "LabBill": "LB"}
+
+
+def financial_year(day: date) -> str:
+    """Indian financial year (April to March) label, e.g. 2026-27."""
+    start = day.year if day.month >= 4 else day.year - 1
+    return f"{start}-{str(start + 1)[-2:]}"
+
+
+def next_receipt_no(db: Session, series: str, day: Optional[date] = None) -> str:
+    """Allocate the next number in ``series`` for the financial year of ``day``.
+
+    The increment is a single UPDATE ... RETURNING, so two counters cannot hand
+    out the same number even when bills are raised at the same moment.
+    """
+    from sqlalchemy import update
+
+    fy = financial_year(day or datetime.now().date())
+    table = models.DocumentSequence
+    stmt = (
+        update(table)
+        .where(table.series == series, table.financial_year == fy)
+        .values(last_value=table.last_value + 1)
+        .returning(table.last_value)
+    )
+    value = db.execute(stmt).scalar()
+    if value is None:
+        try:
+            with db.begin_nested():
+                db.add(table(series=series, financial_year=fy, last_value=0))
+        except IntegrityError:
+            pass  # another transaction created it first
+        value = db.execute(stmt).scalar()
+    return f"{series}/{fy}/{value:06d}"
+
+
+def _assign_receipt_no(db: Session, bill) -> None:
+    bill.receipt_no = next_receipt_no(db, RECEIPT_SERIES[type(bill).__name__])
+
+
 def _get_or_404(db: Session, model, obj_id: int, label: str):
     obj = db.query(model).filter(model.id == obj_id).first()
     if obj is None:
@@ -877,6 +920,7 @@ def create_pharmacy_bill(db: Session, bill: schemas.PharmacyBillCreate):
         details=bill.details or {},
         items=bill_items,
     )
+    _assign_receipt_no(db, db_bill)
     db.add(db_bill)
     db.commit()
     db.refresh(db_bill)
@@ -1368,6 +1412,7 @@ def create_lab_bill(db: Session, bill: schemas.LabBillCreate):
             for item in bill.items
         ],
     )
+    _assign_receipt_no(db, db_bill)
     db.add(db_bill)
     db.commit()
     db.refresh(db_bill)
@@ -1431,6 +1476,7 @@ def create_lab_bill_from_orders(db: Session, payload: schemas.LabBillFromOrders)
         notes=payload.notes,
         items=items,
     )
+    _assign_receipt_no(db, db_bill)
     db.add(db_bill)
     db.flush()
 
@@ -1690,6 +1736,7 @@ def create_op_bill(db: Session, bill: schemas.OPBillCreate, actor: Optional[str]
         total=round(total, 2),
     )
     _set_initial_payment(db_bill, bill.amount_paid, bill.payment_mode, actor)
+    _assign_receipt_no(db, db_bill)
     db.add(db_bill)
 
     if db_token is not None:
@@ -1810,6 +1857,7 @@ def create_ip_bill(db: Session, bill: schemas.IPBillCreate, actor: Optional[str]
         total=round(total, 2),
     )
     _set_initial_payment(db_bill, bill.amount_paid, bill.payment_mode, actor)
+    _assign_receipt_no(db, db_bill)
     db.add(db_bill)
     db.flush()
     # Lock what this bill charged so neither a lab bill nor a later IP bill repeats it.
@@ -4776,3 +4824,171 @@ def get_insurance_stats(db: Session) -> dict:
             or 0
         ),
     }
+
+
+# ============================
+# Day-end closing
+# ============================
+def _payment_mode_split(mode: str, amount: float, details) -> dict:
+    """Split a "Split" payment into its parts; everything else is one mode."""
+    if mode == "Split" and isinstance(details, dict) and details:
+        return {k: float(v or 0) for k, v in details.items() if float(v or 0)}
+    return {mode or "Cash": amount}
+
+
+def day_close_summary(db: Session, day: date) -> dict:
+    """What the counters should hold for ``day``: collections by mode and source."""
+    start, end = _day_bounds(day)
+    by_mode: dict = {}
+    by_source = {"op": 0.0, "ip": 0.0, "pharmacy": 0.0, "lab": 0.0}
+    refunds_due = 0.0
+    receipts = 0
+
+    def add(source, mode, amount, details=None):
+        nonlocal receipts
+        receipts += 1
+        by_source[source] += amount
+        for m, a in _payment_mode_split(mode, amount, details).items():
+            by_mode[m] = by_mode.get(m, 0.0) + a
+
+    # OP/IP: collections are the payment-history entries made on that day (a
+    # bill raised earlier may be settled today). Payments are recorded against
+    # recent bills, so a 400-day window bounds the scan.
+    window_start = start - timedelta(days=400)
+    for source, model in (("op", models.OPBill), ("ip", models.IPBill)):
+        for bill in db.query(model).filter(model.bill_date >= window_start, model.bill_date <= end).all():
+            for entry in bill.payment_history or []:
+                at = entry.get("at")
+                if not at or not (start.isoformat() <= at <= end.isoformat()):
+                    continue
+                if entry.get("event") == "cancelled":
+                    refunds_due += float(entry.get("refund_due") or 0)
+                    continue
+                add(source, entry.get("payment_mode") or bill.payment_mode, float(entry.get("amount") or 0),
+                    bill.payment_details if entry.get("payment_mode") == "Split" else None)
+
+    # Counter sales: pharmacy (not charged to an admission) and paid lab bills.
+    for bill in db.query(models.PharmacyBill).filter(
+        models.PharmacyBill.bill_date >= start, models.PharmacyBill.bill_date <= end,
+        models.PharmacyBill.admission_id.is_(None),
+    ):
+        add("pharmacy", bill.payment_mode, float(bill.total or 0), bill.payment_details)
+    for bill in db.query(models.LabBill).filter(
+        models.LabBill.bill_date >= start, models.LabBill.bill_date <= end, models.LabBill.status == "Paid",
+    ):
+        add("lab", bill.payment_mode, float(bill.total or 0), bill.payment_details)
+
+    by_mode = {k: round(v, 2) for k, v in sorted(by_mode.items())}
+    total = round(sum(by_mode.values()), 2)
+    closing = db.query(models.DayClosing).filter(models.DayClosing.business_date == day).first()
+    return {
+        "date": day.isoformat(),
+        "by_mode": by_mode,
+        "by_source": {k: round(v, 2) for k, v in by_source.items()},
+        "total_collected": total,
+        "refunds_due": round(refunds_due, 2),
+        "expected_cash": round(by_mode.get("Cash", 0.0) - refunds_due, 2),
+        "receipts": receipts,
+        "closing": None if closing is None else {
+            "counted_cash": closing.counted_cash,
+            "expected_cash": closing.expected_cash,
+            "variance": closing.variance,
+            "notes": closing.notes,
+            "closed_by": closing.closed_by,
+            "closed_at": closing.closed_at.isoformat() if closing.closed_at else None,
+        },
+    }
+
+
+def close_day(db: Session, payload: schemas.DayCloseCreate, actor: Optional[str]) -> dict:
+    if payload.date > date.today():
+        raise HTTPException(status_code=422, detail="A future day cannot be closed.")
+    if db.query(models.DayClosing).filter(models.DayClosing.business_date == payload.date).first():
+        raise HTTPException(status_code=409, detail=f"{payload.date.isoformat()} has already been closed.")
+    summary = day_close_summary(db, payload.date)
+    expected = summary["expected_cash"]
+    variance = round(payload.counted_cash - expected, 2)
+    if abs(variance) >= 0.01 and not (payload.notes or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail=f"Counted cash differs from expected by Rs {variance}. Explain the difference in the notes.",
+        )
+    summary.pop("closing", None)
+    db.add(models.DayClosing(
+        business_date=payload.date, expected_cash=expected, counted_cash=round(payload.counted_cash, 2),
+        variance=variance, summary=summary, notes=payload.notes, closed_by=actor,
+    ))
+    db.add(models.AuditLog(
+        username=actor, action="DAY_CLOSED",
+        details=f"{payload.date.isoformat()}: expected Rs {expected}, counted Rs {payload.counted_cash}, variance Rs {variance}",
+    ))
+    db.commit()
+    return day_close_summary(db, payload.date)
+
+
+# ============================
+# Notifications
+# ============================
+def notifications_for(db: Session, user: models.User) -> List[dict]:
+    """Things needing attention, filtered to what this role acts on."""
+    role, today = user.role, date.today()
+    items: List[dict] = []
+
+    def note(key, roles, severity, title, detail, tab, count):
+        if count and (role in roles or role == "Admin"):
+            items.append({"key": key, "severity": severity, "title": title, "detail": detail, "tab": tab,
+                          "count": int(count)})
+
+    stocks = db.query(models.MedicineStock).all()
+    low = sum(1 for s in stocks if (s.quantity or 0) <= (s.min_stock_level or 0))
+    expired = sum(1 for s in stocks if s.sellable_quantity < (s.quantity or 0))
+    soon = today + timedelta(days=30)
+    expiring = sum(
+        1 for s in stocks
+        if any(b.quantity and b.expiry_date and today <= b.expiry_date <= soon for b in s.batches)
+        or (s.expiry_date and today <= s.expiry_date <= soon and (s.quantity or 0) > sum(b.quantity or 0 for b in s.batches))
+    )
+    note("expired_stock", ("Pharmacy",), "error", "Expired stock on shelf",
+         f"{expired} item(s) hold expired units that cannot be sold — write them off.", "inventory", expired)
+    note("low_stock", ("Pharmacy",), "warning", "Low stock",
+         f"{low} item(s) are at or below their reorder level.", "inventory", low)
+    note("expiring_stock", ("Pharmacy",), "info", "Expiring within 30 days",
+         f"{expiring} item(s) have stock expiring by {soon.isoformat()}.", "inventory", expiring)
+
+    overdue = (
+        db.query(func.count(models.LabOrder.id))
+        .filter(models.LabOrder.due_at.isnot(None), models.LabOrder.due_at < _utcnow(),
+                models.LabOrder.status.notin_(("Verified", "Cancelled")))
+        .scalar() or 0
+    )
+    note("lab_overdue", ("Laboratory", "Doctor"), "warning", "Lab orders past TAT",
+         f"{overdue} order(s) are past their turnaround time.", "lab_dashboard", overdue)
+
+    dues = [
+        b for model in (models.OPBill, models.IPBill)
+        for b in db.query(model).filter(model.payment_status.in_(("Pending", "Partial"))).all()
+    ]
+    note("dues", ("Billing", "Receptionist"), "warning", "Outstanding bills",
+         f"{len(dues)} bill(s) with Rs {round(sum(b.amount_due for b in dues), 2)} still due.", "billing", len(dues))
+
+    due_discharges = (
+        db.query(models.IPAdmission)
+        .filter(models.IPAdmission.status == "Admitted",
+                models.IPAdmission.expected_discharge_date.isnot(None),
+                models.IPAdmission.expected_discharge_date <= today)
+        .all()
+    )
+    without_summary = [a for a in due_discharges if a.discharge_summary is None]
+    note("discharge_due", ("Doctor", "Nurse"), "info", "Discharges due",
+         f"{len(due_discharges)} patient(s) are due for discharge; {len(without_summary)} without a summary.",
+         "ipd_workspace", len(due_discharges))
+
+    yesterday = today - timedelta(days=1)
+    if role in ("Billing", "Admin"):
+        closed = db.query(models.DayClosing.id).filter(models.DayClosing.business_date == yesterday).first()
+        if closed is None and day_close_summary(db, yesterday)["receipts"]:
+            note("day_not_closed", ("Billing",), "warning", "Day not closed",
+                 f"{yesterday.isoformat()} has collections but no cash closing.", "reports", 1)
+
+    order = {"error": 0, "warning": 1, "info": 2}
+    return sorted(items, key=lambda i: order[i["severity"]])

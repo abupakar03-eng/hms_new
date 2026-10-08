@@ -66,6 +66,8 @@ export interface MedicineBatch {
 }
 
 export interface BillSettlement {
+  /** Financial-year receipt number, e.g. OP/2026-27/000042. */
+  receipt_no?: string | null;
   payment_status?: 'Pending' | 'Partial' | 'Paid' | 'Cancelled';
   amount_paid?: number;
   amount_due?: number;

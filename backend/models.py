@@ -437,6 +437,8 @@ class PharmacyBill(Base):
     __tablename__ = "pharmacy_bills"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Financial-year receipt number, e.g. OP/2026-27/000042 (see crud.next_receipt_no).
+    receipt_no = Column(String, unique=True, nullable=True, index=True)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=True, index=True)
     patient_name = Column(String, nullable=True)  # walk-in patients
     bill_date = Column(DateTime, default=utcnow, index=True)
@@ -477,6 +479,8 @@ class LabBill(Base):
     __tablename__ = "lab_bills"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Financial-year receipt number, e.g. OP/2026-27/000042 (see crud.next_receipt_no).
+    receipt_no = Column(String, unique=True, nullable=True, index=True)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=True, index=True)
     patient_name = Column(String, nullable=True)
     bill_date = Column(DateTime, default=utcnow, index=True)
@@ -882,6 +886,8 @@ class OPBill(Base):
     __tablename__ = "op_bills"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Financial-year receipt number, e.g. OP/2026-27/000042 (see crud.next_receipt_no).
+    receipt_no = Column(String, unique=True, nullable=True, index=True)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False, index=True)
     token_id = Column(Integer, ForeignKey("op_tokens.id"), nullable=True)
     bill_date = Column(DateTime, default=utcnow, index=True)
@@ -922,6 +928,8 @@ class IPBill(Base):
     __tablename__ = "ip_bills"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Financial-year receipt number, e.g. OP/2026-27/000042 (see crud.next_receipt_no).
+    receipt_no = Column(String, unique=True, nullable=True, index=True)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False, index=True)
     admission_id = Column(Integer, ForeignKey("ip_admissions.id"), nullable=True)
     bill_date = Column(DateTime, default=utcnow, index=True)
@@ -1025,3 +1033,31 @@ class InsuranceClaim(Base):
 
     patient = relationship("Patient", back_populates="insurance_claims")
     policy = relationship("InsurancePolicy")
+
+
+class DocumentSequence(Base):
+    """Gap-free counter per document series and financial year."""
+
+    __tablename__ = "document_sequences"
+    __table_args__ = (UniqueConstraint("series", "financial_year", name="uq_document_sequences_series_fy"),)
+
+    id = Column(Integer, primary_key=True)
+    series = Column(String, nullable=False)          # OP | IP | PH | LB
+    financial_year = Column(String, nullable=False)  # 2026-27
+    last_value = Column(Integer, nullable=False, default=0)
+
+
+class DayClosing(Base):
+    """The cashier's end-of-day count, frozen with the figures it was checked against."""
+
+    __tablename__ = "day_closings"
+
+    id = Column(Integer, primary_key=True)
+    business_date = Column(Date, unique=True, nullable=False, index=True)
+    expected_cash = Column(Float, nullable=False, default=0.0)
+    counted_cash = Column(Float, nullable=False, default=0.0)
+    variance = Column(Float, nullable=False, default=0.0)
+    summary = Column(JSON, nullable=False, default=dict)
+    notes = Column(Text, nullable=True)
+    closed_by = Column(String, nullable=True)
+    closed_at = Column(DateTime, default=utcnow, nullable=False)
