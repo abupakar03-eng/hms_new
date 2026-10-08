@@ -6,6 +6,7 @@
  * scopes to the caller's own patient id — the component never sends a patient id.
  */
 import React, { useEffect, useMemo, useState } from 'react';
+import { confirmDialog } from './ui/feedback';
 import {
   Activity, Calendar, Clipboard, Download, FileText, FlaskConical, Loader2, LogOut,
   Printer, Receipt, RefreshCw, Save, Shield, UserRound, X, CheckCircle2, AlertTriangle,
@@ -175,7 +176,7 @@ export default function PatientPortal({ user, onLogout, theme, onToggleTheme }: 
   };
 
   const cancelAppointment = async (id: number) => {
-    if (!window.confirm('Cancel this appointment?')) return;
+    if (!(await confirmDialog('The slot will be released for other patients.', { title: 'Cancel this appointment?', confirmLabel: 'Cancel appointment', danger: true }))) return;
     try {
       await api.put(`${API_BASE}/portal/appointments/${id}/cancel`);
       notify('Appointment cancelled.');

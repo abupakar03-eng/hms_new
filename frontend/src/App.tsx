@@ -1,37 +1,23 @@
 import React, { useState, useEffect, useRef, Fragment } from 'react';
+import { notify, confirmDialog, promptDialog } from './ui/feedback';
 import axios from 'axios';
 import { 
   Users, FileText, Clipboard, Search, CheckCircle, Clock, Calendar, Activity, Pill, PlusCircle, TestTube, Bed, FlaskConical, Database, UserRound, ArrowRightCircle,
   ShoppingBag, Printer, AlertTriangle, DollarSign, BarChart2, Download,
   Building2, Receipt, Settings, Shield,
   Save, RefreshCw, UploadCloud, DownloadCloud,
-  Sun, Moon, Loader2, CheckCircle2, List, Eye, Edit, Trash2, X, Plus, ChevronDown
+  Sun, Moon, Loader2, CheckCircle2, List, Eye, Edit, Trash2, X, Plus, ChevronDown, Menu
 } from 'lucide-react';
 import Select from 'react-select';
 import PatientPortal from './PatientPortal';
 import RoleFlow from './RoleFlow';
 import { API_BASE } from './api';
+import { useHashTab } from './routing';
+import { selectStyles } from './ui/selectStyles';
+import { SearchableDropdown } from './components/SearchableDropdown';
+import { LabPatientHeader } from './components/LabPatientHeader';
+import type { Patient, OPToken, Appointment, MedicineStock, MedicineBatch, BillSettlement, DischargeClearance, PharmacyBill, IPAdmission, LabResultRow, LabReport, LabTestParameter, LabTestMaster, LabOrder, LabSample, LabStats, OPBill, IPBill, SearchResultItem, DailyReport, User } from './types';
 
-const selectStyles = {
-  control: (base: any, state: any) => ({
-    ...base,
-    backgroundColor: 'var(--bg-input)',
-    borderColor: state.isFocused ? 'var(--border-focus)' : 'var(--input-border)',
-    color: 'var(--text-primary)',
-    boxShadow: state.isFocused ? '0 0 0 3px var(--primary-glow)' : 'none',
-    minHeight: '40px',
-    '&:hover': { borderColor: 'var(--border-focus)' }
-  }),
-  menu: (base: any) => ({ ...base, backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', zIndex: 100 }),
-  option: (base: any, state: any) => ({
-    ...base,
-    backgroundColor: state.isFocused ? 'var(--bg-card-hover)' : 'transparent',
-    color: 'var(--text-primary)',
-    '&:active': { backgroundColor: 'var(--primary-glow)' }
-  }),
-  singleValue: (base: any) => ({ ...base, color: 'var(--text-primary)' }),
-  input: (base: any) => ({ ...base, color: 'var(--text-primary)' })
-};
 
 // The API base (and the session/token helpers) live in ./api so the staff shell
 // and the patient portal resolve them identically.
@@ -39,456 +25,19 @@ const selectStyles = {
 // Ward/room/bed layout now comes from the server (/ipd/bed-board). The old
 // HOSPITAL_LAYOUT constant was hard-coded hospital data and has been removed.
 
-interface Patient {
-  id: number;
-  name: string;
-  age: number;
-  gender: string;
-  phone?: string;
-  address?: string;
-  aadhaar?: string;
-  blood_group?: string;
-  details?: Record<string, any>;
-  created_at: string;
-}
-
-interface OPToken {
-  id: number;
-  patient_id: number;
-  token_number: number;
-  session: string;
-  date: string;
-  status: string;
-  fee: number;
-  is_billed: boolean;
-  doctor_id?: number;
-  doctor_name?: string;
-  department?: string;
-  created_at?: string;
-  details?: Record<string, any>;
-  patient?: Patient;
-}
-
-interface Appointment {
-  id: number;
-  patient_id: number;
-  doctor_id?: number;
-  doctor_name?: string;
-  appointment_date: string;
-  time_slot?: string;
-  reason?: string;
-  status: string;
-  details?: Record<string, any>;
-  patient?: Patient;
-}
-
-interface MedicineStock {
-  id: number;
-  name: string;
-  category: string;
-  batch_no?: string;
-  expiry_date?: string;
-  quantity: number;
-  unit_price: number;
-  min_stock_level: number;
-  details?: Record<string, any>;
-  sellable_quantity?: number;
-}
-
-interface MedicineBatch {
-  id: number;
-  medicine_id: number;
-  batch_number: string;
-  expiry_date?: string | null;
-  quantity: number;
-  received_at: string;
-}
-
-interface BillSettlement {
-  payment_status?: 'Pending' | 'Partial' | 'Paid' | 'Cancelled';
-  amount_paid?: number;
-  amount_due?: number;
-  cancelled_reason?: string | null;
-}
-
-interface ClearanceCheck { key: string; label: string; status: 'ok' | 'warning' | 'info'; detail: string; }
-interface DischargeClearance { ready: boolean; outstanding_amount: number; unbilled_amount: number; checks: ClearanceCheck[]; }
-
-interface PharmacyBillItem {
-  id?: number;
-  medicine_id: number;
-  medicine_name: string;
-  quantity: number;
-  unit_price: number;
-  total_price: number;
-}
-
-interface PharmacyBill {
-  id: number;
-  patient_id?: number;
-  patient_name?: string;
-  bill_date: string;
-  subtotal: number;
-  discount: number;
-  gst: number;
-  total: number;
-  items: PharmacyBillItem[];
-  patient?: Patient;
-}
-
-interface IPAdmission {
-  id: number;
-  patient_id: number;
-  admission_date: string;
-  bed_id?: number | null;
-  bed_code?: string | null;
-  ward_number?: string;
-  room_number?: string;
-  doctor_in_charge?: string;
-  attending_doctor_id?: number | null;
-  attending_doctor?: { id: number; full_name?: string | null; username: string } | null;
-  department_id?: number | null;
-  admission_type?: string;
-  admission_source?: string | null;
-  provisional_diagnosis?: string | null;
-  reason_for_admission?: string;
-  expected_discharge_date?: string | null;
-  discharge_date?: string;
-  discharge_type?: string | null;
-  discharged_by?: string | null;
-  status: string;
-  bed?: { id: number; bed_code: string; daily_charge?: number | null } | null;
-  patient?: Patient;
-}
-
-// ---- Laboratory ------------------------------------------------------------
-export type LabFlag = 'Normal' | 'High' | 'Low' | 'Critical High' | 'Critical Low' | 'Abnormal';
-
-export interface LabResultRow {
-  parameter: string;
-  result: string;
-  unit: string;
-  range: string;
-  normal_range?: string;
-  flag: LabFlag | string;
-  remarks?: string;
-  critical_low?: number | null;
-  critical_high?: number | null;
-}
-
-export interface LabReport {
-  id: number;
-  patient_id: number;
-  order_id?: number;
-  test_id?: number;
-  test_name: string;
-  result_value?: string;
-  normal_range?: string;
-  units?: string;
-  date_conducted: string;
-  reported_by?: string;
-  verified_by?: string;
-  verified_at?: string;
-  status?: string;
-  is_abnormal?: boolean;
-  interpretation?: string;
-  remarks?: string;
-  results_data?: LabResultRow[] | Record<string, any> | null;
-  patient?: Patient;
-}
-
-export interface LabTestParameter {
-  id?: number;
-  test_id?: number;
-  name: string;
-  data_type?: string;
-  options?: string;
-  unit?: string;
-  reference_range?: string;
-  normal_range_male?: string;
-  normal_range_female?: string;
-  normal_range_child?: string;
-  critical_low?: number | null;
-  critical_high?: number | null;
-  display_order?: number;
-}
-
-export interface LabTestMaster {
-  id: number;
-  test_code: string;
-  test_name: string;
-  category?: string;
-  department?: string;
-  sample_type?: string;
-  container_type?: string;
-  method?: string;
-  unit?: string;
-  reference_range?: string;
-  normal_range_male?: string;
-  normal_range_female?: string;
-  normal_range_child?: string;
-  price: number;
-  tat_hours: number;
-  is_panel?: boolean;
-  is_active: boolean;
-  parameters?: LabTestParameter[];
-}
-
-export interface LabOrder {
-  id: number;
-  patient_id: number;
-  doctor_name?: string;
-  test_id: number;
-  panel_id?: number;
-  bill_id?: number;
-  order_date: string;
-  status: string;
-  priority?: string;
-  tat_hours?: number;
-  due_at?: string;
-  sample_collected_at?: string;
-  result_entered_at?: string;
-  verified_by?: string;
-  verified_at?: string;
-  remarks?: string;
-  interpretation?: string;
-  patient?: Patient;
-  test?: LabTestMaster;
-}
-
-export interface LabSample {
-  id: number;
-  order_id: number;
-  sample_type: string;
-  collection_date?: string;
-  received_at?: string;
-  collected_by?: string;
-  container_type?: string;
-  barcode?: string;
-  volume?: string;
-  rejection_reason?: string;
-  remarks?: string;
-  status: string;
-  order?: LabOrder;
-}
-
-export interface LabStats {
-  pending: number;
-  sample_collected: number;
-  testing: number;
-  ready_to_report: number;
-  verified_today: number;
-  overdue: number;
-  stat_pending: number;
-  samples_pending: number;
-  rejected_samples: number;
-  total_tests: number;
-  active_tests: number;
-  panels: number;
-  today_orders: number;
-  today_revenue: number;
-  pending_billing: number;
-  tat_compliance_percent: number;
-}
-
-interface OPBill extends BillSettlement {
-  id: number;
-  patient_id: number;
-  token_id?: number;
-  bill_date: string;
-  doctor_name?: string;
-  department?: string;
-  consultation_fee: number;
-  lab_charges: number;
-  pharmacy_charges: number;
-  other_charges: {name: string; amount: number}[];
-  subtotal: number;
-  discount: number;
-  gst: number;
-  total: number;
-  payment_mode: string;
-  payment_details?: Record<string, number>;
-  notes?: string;
-  patient?: Patient;
-}
-
-interface IPBill extends BillSettlement {
-  id: number;
-  patient_id: number;
-  admission_id?: number;
-  bill_date: string;
-  doctor_name?: string;
-  room_charge_per_day: number;
-  days_stayed: number;
-  room_charges: number;
-  doctor_charges: number;
-  nursing_charges: number;
-  pharmacy_charges: number;
-  lab_charges: number;
-  other_charges: {name: string; amount: number}[];
-  subtotal: number;
-  discount: number;
-  gst: number;
-  total: number;
-  payment_mode: string;
-  payment_details?: Record<string, number>;
-  notes?: string;
-  patient?: Patient;
-}
-
-interface SearchResultItem {
-  type: string;
-  id: number;
-  patient_id?: number;
-  patient_name?: string;
-  detail: string;
-  date?: string;
-  amount?: number;
-}
-
-interface DailyReport {
-  date: string;
-  op_revenue: number;
-  ip_revenue: number;
-  pharmacy_revenue: number;
-  lab_revenue: number;
-  total_revenue: number;
-  total_patients: number;
-  total_bills: number;
-}
-
-interface User {
-  id: number;
-  username: string;
-  role: string;
-  is_active: boolean;
-  created_at: string;
-  patient_id?: number | null;
-  full_name?: string | null;
-  email?: string | null;
-  phone?: string | null;
-}
-
-const SearchableDropdown = ({ options, value, onChange, placeholder, renderOption, searchKeys = ['label'] }: any) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const [search, setSearch] = useState('');
-  const wrapperRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: any) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) setIsOpen(false);
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const filteredOptions = options.filter((opt: any) => 
-    searchKeys.some((key: string) => opt[key]?.toString().toLowerCase().includes(search.toLowerCase()))
-  );
-
-  const selectedOpt = options.find((o: any) => o.value === value);
-
-  return (
-    <div ref={wrapperRef} style={{ position: 'relative', width: '100%' }}>
-      <div 
-        onClick={() => setIsOpen(!isOpen)}
-        style={{ padding: '8px', border: '1px solid #cbd5e1', borderRadius: '4px', background: 'white', color: '#0f172a', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-      >
-        <span>{selectedOpt ? (renderOption ? renderOption(selectedOpt) : selectedOpt.label) : placeholder}</span>
-        <ChevronDown size={16} />
-      </div>
-      {isOpen && (
-        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', color: '#0f172a', border: '1px solid #cbd5e1', borderRadius: '4px', zIndex: 100, maxHeight: '300px', overflowY: 'auto', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
-          <div style={{ padding: '8px', position: 'sticky', top: 0, background: 'white', borderBottom: '1px solid #e2e8f0' }}>
-            <input 
-              type="text" 
-              placeholder="Type to search..." 
-              value={search} 
-              onChange={e => setSearch(e.target.value)}
-              style={{ width: '100%', padding: '6px', border: '1px solid #cbd5e1', borderRadius: '4px', color: '#0f172a' }}
-              autoFocus
-            />
-          </div>
-          {filteredOptions.length > 0 ? (
-            filteredOptions.map((opt: any, index: number) => (
-              <div 
-                key={index}
-                onClick={() => { onChange(opt.value); setIsOpen(false); setSearch(''); }}
-                style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
-                onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#f8fafc')}
-                onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
-              >
-                {renderOption ? renderOption(opt) : opt.label}
-              </div>
-            ))
-          ) : (
-            <div style={{ padding: '8px', color: 'var(--text-muted)', textAlign: 'center' }}>No results found</div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
-
-
-const LabPatientHeader = ({ patients, selectedId, onChange, labOrders, ipAdmissions }: any) => {
-  const patientOptions = patients.map((p: any) => ({
-    label: `${p.id} - ${p.name} - ${p.phone}`,
-    value: p.id,
-    id: p.id,
-    name: p.name,
-    phone: p.phone,
-    uhid: p.aadhaar || '',
-  }));
-
-  const selectedPatient = patients.find((p: any) => p.id === selectedId);
-  
-  // Try to find recent order to get Doctor/Dept
-  const recentOrder = labOrders.filter((o: any) => o.patient_id === selectedId).sort((a: any, b: any) => b.id - a.id)[0];
-  const isIP = ipAdmissions.some((a: any) => a.patient_id === selectedId && a.status === 'Admitted');
-  
-  return (
-    <div className="glass-card" style={{ marginBottom: '20px', padding: '15px' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '20px', alignItems: 'start' }}>
-        <div>
-          <label style={{ fontWeight: 'bold', marginBottom: '8px', display: 'block' }}>Search & Select Patient</label>
-          <SearchableDropdown 
-            options={patientOptions}
-            value={selectedId}
-            onChange={onChange}
-            placeholder="Search ID, Name, Mobile, UHID..."
-            searchKeys={['id', 'name', 'phone', 'uhid']}
-          />
-        </div>
-        {selectedPatient && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', background: 'var(--bg-card)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border)' }}>
-            <div><small style={{color:'var(--text-muted)'}}>Patient Name</small><br/><b>{selectedPatient.name}</b></div>
-            <div><small style={{color:'var(--text-muted)'}}>ID / UHID</small><br/><b>{selectedPatient.id} / {selectedPatient.aadhaar || 'N/A'}</b></div>
-            <div><small style={{color:'var(--text-muted)'}}>Age / Gender</small><br/><b>{selectedPatient.age} / {selectedPatient.gender}</b></div>
-            <div><small style={{color:'var(--text-muted)'}}>Mobile / Blood</small><br/><b>{selectedPatient.phone} / {selectedPatient.blood_group || 'N/A'}</b></div>
-            <div><small style={{color:'var(--text-muted)'}}>Visit Type</small><br/><b>{isIP ? 'IP Admission' : 'OP Visit'}</b></div>
-            <div><small style={{color:'var(--text-muted)'}}>Doctor</small><br/><b>{recentOrder ? recentOrder.doctor_name || 'Walk-in' : 'N/A'}</b></div>
-            <div><small style={{color:'var(--text-muted)'}}>Visit Date</small><br/><b>{recentOrder ? new Date(recentOrder.created_at || Date.now()).toLocaleDateString() : 'N/A'}</b></div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
 
 export default function App() {
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
   const [globalLoading, setGlobalLoading] = useState(false);
-  const [toast, setToast] = useState<{message:string, type:'success'|'error'} | null>(null);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  const showToast = (message: string, type: 'success'|'error' = 'success') => {
-    setToast({message, type});
-    setTimeout(() => setToast(null), 3000);
+  // Kept for the many existing call sites; the app-wide Toaster renders it.
+  const showToast = (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
+    notify[type](message);
   };
 
   useEffect(() => {
@@ -545,7 +94,13 @@ export default function App() {
     address: '', blood_group: '', password: '', confirm: ''
   });
   
-  const [activeTab, setActiveTab] = useState('dashboard');
+  // The open screen lives in the URL hash (#/billing) so reload and Back work.
+  const [activeTab, setActiveTab, arrivedOnScreen] = useHashTab('dashboard');
+  // Phone/tablet: the sidebar collapses behind a menu button.
+  const [navOpen, setNavOpen] = useState(false);
+  // A reload of a signed-in session keeps the screen in the URL; a fresh sign-in
+  // goes to the role's home screen instead.
+  const restoreScreenOnce = useRef(arrivedOnScreen && !!localStorage.getItem('token'));
   const [patients, setPatients] = useState<Patient[]>([]);
   const [tokens, setTokens] = useState<OPToken[]>([]);
   const [inventory, setInventory] = useState<MedicineStock[]>([]);
@@ -779,6 +334,7 @@ export default function App() {
         .then(res => {
           setCurrentUser(res.data);
           const role = res.data.role;
+          if (restoreScreenOnce.current) { restoreScreenOnce.current = false; return; }
           // A patient account never renders the staff shell; PatientPortal is
           // returned instead (see the render guard below).
           if (role === 'Patient') setActiveTab('dashboard');
@@ -967,7 +523,7 @@ export default function App() {
         follow_up_date: s?.follow_up_date || '',
       });
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Could not load the admission.');
+      notify.error(err.response?.data?.detail || 'Could not load the admission.');
       setAdmissionDetail(null);
     }
   };
@@ -996,14 +552,14 @@ export default function App() {
         bp_diastolic: '', spo2: '', pain_score: '', blood_sugar: '', intake_ml: '', output_ml: '', notes: '' });
       await refreshAdmission();
       loadIpdStructure();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not chart the vitals.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not chart the vitals.'); }
     finally { setAdmissionDetailBusy(false); }
   };
 
   const handleAddMedication = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!admissionDetail?.id) return;
-    if (!medicationForm.medicine_name.trim()) return alert('Enter the medicine name.');
+    if (!medicationForm.medicine_name.trim()) return notify.warning('Enter the medicine name.');
     setAdmissionDetailBusy(true);
     try {
       await axios.post(`${API_BASE}/ip-admissions/${admissionDetail.id}/medications`, {
@@ -1013,7 +569,7 @@ export default function App() {
       showToast('Medication prescribed');
       setMedicationForm({ medicine_name: '', dose: '', route: 'Oral', frequency: 'BD', notes: '' });
       await refreshAdmission();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not prescribe the medication.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not prescribe the medication.'); }
     finally { setAdmissionDetailBusy(false); }
   };
 
@@ -1022,17 +578,17 @@ export default function App() {
       await axios.post(`${API_BASE}/ipd/medications/${orderId}/administer`, { status });
       showToast(`Dose ${status.toLowerCase()}`);
       await refreshAdmission();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not record the administration.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not record the administration.'); }
   };
 
   const handleStopMedication = async (orderId: number) => {
-    const reason = window.prompt('Reason for stopping this medication:');
+    const reason = await promptDialog('Why is this medication being stopped?', { title: 'Stop medication', confirmLabel: 'Stop medication', danger: true });
     if (!reason) return;
     try {
       await axios.put(`${API_BASE}/ipd/medications/${orderId}`, { status: 'Stopped', stop_reason: reason });
       showToast('Medication stopped');
       await refreshAdmission();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not stop the medication.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not stop the medication.'); }
   };
 
   const handleSaveDischargeSummary = async () => {
@@ -1044,23 +600,23 @@ export default function App() {
       });
       showToast('Discharge summary saved as draft');
       await refreshAdmission();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not save the summary.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not save the summary.'); }
     finally { setAdmissionDetailBusy(false); }
   };
 
   const handleDischargeSummaryStatus = async (status: string) => {
     const summaryId = admissionDetail?.discharge_summary?.id;
-    if (!summaryId) return alert('Save the summary first.');
+    if (!summaryId) return notify.warning('Save the summary first.');
     try {
       await axios.put(`${API_BASE}/ipd/discharge-summaries/${summaryId}`, { status });
       showToast(`Summary ${status.toLowerCase()}`);
       await refreshAdmission();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not update the summary.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not update the summary.'); }
   };
 
   const handleTransferBed = async () => {
     if (!admissionDetail?.id) return;
-    if (!transferTargetBedId) return alert('Choose the destination bed.');
+    if (!transferTargetBedId) return notify.warning('Choose the destination bed.');
     try {
       await axios.post(`${API_BASE}/ip-admissions/${admissionDetail.id}/transfer`, {
         to_bed_id: Number(transferTargetBedId), reason: 'Bed transfer',
@@ -1069,7 +625,7 @@ export default function App() {
       setTransferTargetBedId('');
       await refreshAdmission();
       loadAllData(); loadIpdStructure();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not transfer the patient.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not transfer the patient.'); }
   };
 
   const openDischarge = async () => {
@@ -1086,7 +642,7 @@ export default function App() {
     if (!admissionDetail?.id) return;
     if (dischargeClearance && !dischargeClearance.ready && !dischargeForm.require_clearance) {
       const open = dischargeClearance.checks.filter(c => c.status === 'warning').map(c => `• ${c.label}: ${c.detail}`).join('\n');
-      if (!window.confirm(`Clearance is incomplete:\n${open}\n\nDischarge anyway? This is recorded in the audit trail.`)) return;
+      if (!(await confirmDialog(`${open}\n\nDischarge anyway? The open items are recorded in the audit trail.`, { title: 'Clearance is incomplete', confirmLabel: 'Discharge anyway', danger: true }))) return;
     }
     try {
       await axios.post(`${API_BASE}/ip-admissions/${admissionDetail.id}/discharge`, dischargeForm);
@@ -1094,7 +650,7 @@ export default function App() {
       setIsDischargeOpen(false);
       setAdmissionDetail(null);
       loadAllData(); loadIpdStructure();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not discharge the patient.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not discharge the patient.'); }
   };
 
   const handleCreateDepartment = async (e: React.FormEvent) => {
@@ -1104,7 +660,7 @@ export default function App() {
       showToast('Department created');
       setNewDepartment({ name: '', code: '', department_type: 'Clinical' });
       loadIpdStructure();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not create the department.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not create the department.'); }
   };
 
   const handleCreateWard = async (e: React.FormEvent) => {
@@ -1116,29 +672,29 @@ export default function App() {
       showToast('Ward created');
       setNewWard({ name: '', code: '', ward_type: 'General', department_id: '', daily_charge: 0 });
       loadIpdStructure();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not create the ward.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not create the ward.'); }
   };
 
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newRoom.ward_id) return alert('Choose a ward.');
+    if (!newRoom.ward_id) return notify.warning('Choose a ward.');
     try {
       await axios.post(`${API_BASE}/rooms/`, { ...newRoom, ward_id: Number(newRoom.ward_id) });
       showToast('Room created');
       setNewRoom({ ward_id: newRoom.ward_id, room_number: '', room_type: '' });
       loadIpdStructure();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not create the room.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not create the room.'); }
   };
 
   const handleCreateBed = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newBed.room_id) return alert('Choose a room.');
+    if (!newBed.room_id) return notify.warning('Choose a room.');
     try {
       await axios.post(`${API_BASE}/beds/`, { ...newBed, room_id: Number(newBed.room_id) });
       showToast('Bed created');
       setNewBed({ room_id: newBed.room_id, bed_code: '', bed_type: '' });
       loadIpdStructure();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not create the bed.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not create the bed.'); }
   };
 
   const handleSetBedStatus = async (bedId: number, status: string) => {
@@ -1146,17 +702,17 @@ export default function App() {
       await axios.put(`${API_BASE}/beds/${bedId}`, { status });
       showToast(`Bed marked ${status}`);
       loadIpdStructure();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not update the bed.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not update the bed.'); }
   };
 
   const handleAssignBed = async (admissionId: number, patientLabel: string) => {
     const bed = bedBoard.find(b => b.bed_id === selectedBedId);
-    if (!bed) return alert(`Choose an available bed for ${patientLabel} first.`);
+    if (!bed) return notify.warning(`Choose an available bed for ${patientLabel} first.`);
     try {
       await axios.post(`${API_BASE}/ip-admissions/${admissionId}/bed`, { bed_id: bed.bed_id });
       showToast(`${patientLabel} assigned to ${bed.bed_code}`);
       loadAllData(); loadIpdStructure();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not assign the bed.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not assign the bed.'); }
   };
 
   // =================== INSURANCE DESK ===================
@@ -1177,7 +733,7 @@ export default function App() {
 
   const handleCreatePolicy = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!policyForm.patient_id) return alert('Select a patient.');
+    if (!policyForm.patient_id) return notify.warning('Select a patient.');
     try {
       await axios.post(`${API_BASE}/insurance/policies`, {
         ...policyForm,
@@ -1189,13 +745,13 @@ export default function App() {
       setPolicyForm({ patient_id: '', provider: '', policy_number: '', member_id: '', plan_name: '', sum_insured: 0, tpa_name: '', tpa_contact: '', notes: '' });
       loadInsurance();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to add policy');
+      notify.error(err.response?.data?.detail || 'Failed to add policy');
     }
   };
 
   const handleCreateClaim = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!claimForm.patient_id) return alert('Select a patient.');
+    if (!claimForm.patient_id) return notify.warning('Select a patient.');
     try {
       await axios.post(`${API_BASE}/insurance/claims`, {
         ...claimForm,
@@ -1208,7 +764,7 @@ export default function App() {
       setClaimForm({ patient_id: '', policy_id: '', claim_type: 'Reimbursement', treatment_type: 'OP', diagnosis: '', claimed_amount: 0, remarks: '' });
       loadInsurance();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to create claim');
+      notify.error(err.response?.data?.detail || 'Failed to create claim');
     }
   };
 
@@ -1225,16 +781,16 @@ export default function App() {
       setSelectedClaim(null);
       loadInsurance();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to update claim');
+      notify.error(err.response?.data?.detail || 'Failed to update claim');
     }
   };
 
   /** Self-service password change (POST /users/me/password). */  const handleChangeMyPassword = async () => {
-    if (!passwordForm.current) return alert('Enter your current password.');
-    if (passwordForm.next !== passwordForm.confirm) return alert('The new passwords do not match.');
-    if (passwordForm.next.length < 8) return alert('The new password must be at least 8 characters.');
+    if (!passwordForm.current) return notify.warning('Enter your current password.');
+    if (passwordForm.next !== passwordForm.confirm) return notify.warning('The new passwords do not match.');
+    if (passwordForm.next.length < 8) return notify.warning('The new password must be at least 8 characters.');
     if (!/[A-Z]/.test(passwordForm.next) || !/\d/.test(passwordForm.next)) {
-      return alert('The new password must contain an uppercase letter and a digit.');
+      return notify.warning('The new password must contain an uppercase letter and a digit.');
     }
     try {
       const res = await axios.post(`${API_BASE}/users/me/password`, {
@@ -1248,9 +804,10 @@ export default function App() {
       setToken(res.data.access_token);
       showToast('Password updated. Other devices have been signed out.', 'success');
       setIsPasswordModalOpen(false);
+      setCurrentUser(u => (u ? { ...u, must_change_password: false } : u));
       setPasswordForm({ current: '', next: '', confirm: '' });
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to update the password.');
+      notify.error(err.response?.data?.detail || 'Failed to update the password.');
     }
   };
 
@@ -1261,19 +818,19 @@ export default function App() {
       showToast(`Role updated to ${role}`);
       loadUsers();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to change the role.');
+      notify.error(err.response?.data?.detail || 'Failed to change the role.');
       loadUsers(); // put the dropdown back to the server value
     }
   };
 
   /** Admin-initiated password reset (PUT /users/{id}/reset-password). */  const handleAdminResetPassword = async (userId: number, username: string) => {
-    const next = window.prompt(`New password for "${username}" (min 8 chars, 1 uppercase, 1 digit):`);
+    const next = await promptDialog(`At least 8 characters with an uppercase letter and a digit. ${username} must change it at next sign-in.`, { title: `Temporary password for ${username}`, confirmLabel: 'Reset password' });
     if (!next) return;
     try {
       await axios.put(`${API_BASE}/users/${userId}/reset-password`, { new_password: next });
       showToast(`Password reset for ${username}`);
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to reset the password.');
+      notify.error(err.response?.data?.detail || 'Failed to reset the password.');
     }
   };
 
@@ -1292,55 +849,55 @@ export default function App() {
 
 
   const handleDeletePatient = async (id: number) => {
-    if (!window.confirm("Are you sure you want to delete this patient?")) return;
+    if (!(await confirmDialog('Only a patient registered by mistake can be deleted; anyone with clinical or billing history is kept.', { title: 'Delete this patient?', danger: true }))) return;
     try {
       await axios.delete(`${API_BASE}/patients/${id}`);
       showToast("Patient deleted successfully", "success");
       loadAllData();
     } catch (err: any) {
       console.error(err);
-      alert(err.response?.data?.detail || "Failed to delete patient");
+      notify.error(err.response?.data?.detail || "Failed to delete patient");
     }
   };
 
   const handleDeleteMedicineStock = async (id: number) => {
-    if (!window.confirm("Are you sure you want to delete this medicine?")) return;
+    if (!(await confirmDialog('Its stock movements stay in the history without the item name link.', { title: 'Delete this stock item?', danger: true }))) return;
     try {
       await axios.delete(`${API_BASE}/inventory/${id}`);
       showToast("Medicine deleted successfully", "success");
       loadAllData();
     } catch (err: any) {
       console.error(err);
-      alert(err.response?.data?.detail || "Failed to delete medicine");
+      notify.error(err.response?.data?.detail || "Failed to delete medicine");
     }
   };
 
   const handleDeleteLabReport = async (id: number) => {
-    if (!window.confirm("Are you sure you want to delete this report?")) return;
+    if (!(await confirmDialog('This cannot be undone.', { title: 'Delete this report?', danger: true }))) return;
     try {
       await axios.delete(`${API_BASE}/lab-reports/${id}`);
       showToast("Report deleted successfully", "success");
       loadAllData();
     } catch (err: any) {
       console.error(err);
-      alert(err.response?.data?.detail || "Failed to delete report");
+      notify.error(err.response?.data?.detail || "Failed to delete report");
     }
   };
 
   const handleDeleteAppointment = async (id: number) => {
-    if (!window.confirm("Are you sure you want to delete this appointment?")) return;
+    if (!(await confirmDialog('The slot becomes free for other patients.', { title: 'Delete this appointment?', danger: true }))) return;
     try {
       await axios.delete(`${API_BASE}/appointments/${id}`);
       showToast("Appointment deleted successfully", "success");
       loadAllData();
     } catch (err: any) {
       console.error(err);
-      alert(err.response?.data?.detail || "Failed to delete appointment");
+      notify.error(err.response?.data?.detail || "Failed to delete appointment");
     }
   };
 
   const handleDeleteUser = async (userId: number) => {
-    if (!window.confirm("Are you sure you want to delete this user?")) return;
+    if (!(await confirmDialog('Accounts that appear on records cannot be deleted — deactivate them instead.', { title: 'Delete this user?', danger: true }))) return;
     try {
       await axios.delete(`${API_BASE}/users/${userId}`);
       showToast("User deleted successfully", "success");
@@ -1453,7 +1010,7 @@ export default function App() {
       await axios.post(`${API_BASE}/hospital-settings/`, { settings });
       setSettingsSaved(true);
       setTimeout(() => setSettingsSaved(false), 3000);
-    } catch (e) { alert('Failed to save settings'); }
+    } catch (e) { notify.error('Failed to save settings'); }
   };
 
   const handleBackupDatabase = async () => {
@@ -1464,7 +1021,7 @@ export default function App() {
       const a = document.createElement('a');
       a.href = url; a.download = `hospital_backup_${new Date().toISOString().split('T')[0]}.json`;
       a.click(); URL.revokeObjectURL(url);
-    } catch (e) { alert('Backup failed'); }
+    } catch (e) { notify.error('Backup failed'); }
   };
 
   useEffect(() => {
@@ -1501,7 +1058,7 @@ export default function App() {
   // Handle Patient Registration
   const handleLabWalkinRegistration = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!patientForm.name || patientForm.age <= 0) return alert('Please fill correct name and age');
+    if (!patientForm.name || patientForm.age <= 0) return notify.warning('Please fill correct name and age');
     try {
       const payload = {
         name: patientForm.name,
@@ -1523,7 +1080,7 @@ export default function App() {
         }
       };
       const res = await axios.post(`${API_BASE}/patients/`, payload);
-      alert('Patient registered successfully!');
+      notify.success('Patient registered successfully!');
       setPatientForm({
         name: '', age: 0, gender: 'Male', phone: '', address: '', aadhaar: '', blood_group: 'A+', occupation: '', marital_status: 'Single', guardian_name: '', emergency_contact: '', insurance_details: '', referral_doctor: '', patient_category: 'General', registration_type: 'Walk-in'
       });
@@ -1533,13 +1090,13 @@ export default function App() {
       setIsLabOrderModalOpen(true);
     } catch (err) {
       console.error(err);
-      alert('Failed to register patient');
+      notify.error('Failed to register patient');
     }
   };
 
   const handleRegisterPatient = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!patientForm.name || patientForm.age <= 0) return alert("Please fill correct name and age");
+    if (!patientForm.name || patientForm.age <= 0) return notify.warning("Please fill correct name and age");
     try {
       const payload = {
         name: patientForm.name,
@@ -1573,7 +1130,7 @@ export default function App() {
       } catch(tokenErr) {
         console.error('Failed to auto-generate token', tokenErr);
       }
-      alert("Patient registered and added to active queue successfully!");
+      notify.success("Patient registered and added to active queue successfully!");
       setPatientForm({ name: '', age: 0, gender: 'Male', phone: '', address: '', aadhaar: '', blood_group: '', occupation: '', marital_status: 'Single', guardian_name: '', emergency_contact: '', insurance_details: '', referral_doctor: '', patient_category: 'General', registration_type: 'Walk-in' });
       loadAllData();
     } catch (err) {
@@ -1608,7 +1165,7 @@ export default function App() {
 
   const handleCreateOPBill = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!opBillForm.patient_id) return alert('Select a patient');
+    if (!opBillForm.patient_id) return notify.warning('Select a patient');
     try {
       const payload: any = {
         patient_id: Number(opBillForm.patient_id),
@@ -1627,12 +1184,12 @@ export default function App() {
       };
       const res = await axios.post(`${API_BASE}/billing/op/`, payload);
       setViewBillDetail({...res.data, bill_type: 'op'});
-      alert('OP Bill created successfully!');
+      notify.success('OP Bill created successfully!');
       setOpBillForm({ patient_id: '', token_id: '', doctor_name: '', department: '', consultation_fee: 0, lab_charges: 0, pharmacy_charges: 0, discount: 0, gst: 5, payment_mode: 'Cash', notes: '' });
       setOpOtherCharges([]);
       loadAllData();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Error creating OP bill');
+      notify.error(err.response?.data?.detail || 'Error creating OP bill');
     }
   };
 
@@ -1646,7 +1203,7 @@ export default function App() {
 
   const handleCreateIPBill = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ipBillForm.patient_id) return alert('Select a patient');
+    if (!ipBillForm.patient_id) return notify.warning('Select a patient');
     try {
       const payload: any = {
         patient_id: Number(ipBillForm.patient_id),
@@ -1671,39 +1228,39 @@ export default function App() {
       };
       const res = await axios.post(`${API_BASE}/billing/ip/`, payload);
       setViewBillDetail({...res.data, bill_type: 'ip'});
-      alert('IP Bill created successfully!');
+      notify.success('IP Bill created successfully!');
       setIpBillForm({ patient_id: '', admission_id: '', doctor_name: '', room_charge_per_day: 0, days_stayed: 1, doctor_charges: 0, nursing_charges: 0, pharmacy_charges: 0, lab_charges: 0, discount: 0, gst: 5, payment_mode: 'Cash', notes: '' });
       setIpOtherCharges([]);
       setIpBillLinks({ lab_order_ids: [], pharmacy_bill_ids: [] });
       setIpAmountPaid('');
       loadAllData();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Error creating IP bill');
+      notify.error(err.response?.data?.detail || 'Error creating IP bill');
     }
   };
 
   // =================== BILL SETTLEMENT ===================
   const handleCollectPayment = async (kind: 'op' | 'ip', bill: OPBill | IPBill) => {
     const due = bill.amount_due ?? 0;
-    const entered = window.prompt(`Amount received for bill #${bill.id} (due ₹${due.toFixed(2)})`, due.toFixed(2));
+    const entered = await promptDialog(`Amount due: ₹${due.toFixed(2)}`, { title: `Collect payment — bill #${bill.id}`, defaultValue: due.toFixed(2), inputType: 'number', confirmLabel: 'Record payment' });
     if (entered === null) return;
     const amount = Number(entered);
-    if (!amount || amount <= 0) return alert('Enter a positive amount.');
+    if (!amount || amount <= 0) return notify.warning('Enter a positive amount.');
     try {
       await axios.post(`${API_BASE}/billing/${kind}/${bill.id}/payments`, { amount, payment_mode: bill.payment_mode === 'Split' ? 'Cash' : bill.payment_mode });
       showToast('Payment recorded');
       loadAllData();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not record the payment.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not record the payment.'); }
   };
 
   const handleCancelBill = async (kind: 'op' | 'ip', bill: OPBill | IPBill) => {
-    const reason = window.prompt(`Reason for cancelling bill #${bill.id}?`);
+    const reason = await promptDialog('The bill leaves revenue and anything it charged becomes billable again. Give a reason for the audit trail.', { title: `Cancel bill #${bill.id}`, confirmLabel: 'Cancel bill', danger: true });
     if (!reason) return;
     try {
       await axios.post(`${API_BASE}/billing/${kind}/${bill.id}/cancel`, { reason });
       showToast('Bill cancelled');
       loadAllData();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Could not cancel the bill.'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Could not cancel the bill.'); }
   };
 
   const settlementBadge = (bill: BillSettlement) => {
@@ -1772,36 +1329,36 @@ export default function App() {
     try {
       const res = await axios.get(`${API_BASE}/reports/department-wise/`);
       setDepartmentWiseReport(res.data);
-    } catch (e) { console.error(e); alert('Error loading department report'); }
+    } catch (e) { console.error(e); notify.error('Error loading department report'); }
   };
 
   const loadPatientReport = async () => {
-    if (!patientReportId) return alert('Enter Patient ID');
+    if (!patientReportId) return notify.warning('Enter Patient ID');
     try {
       const res = await axios.get(`${API_BASE}/reports/patient/${patientReportId}`);
       setPatientReportData(res.data);
-    } catch (e) { console.error(e); alert('Patient not found or error loading report'); }
+    } catch (e) { console.error(e); notify.error('Patient not found or error loading report'); }
   };
 
   const loadMedicineStockReport = async () => {
     try {
       const res = await axios.get(`${API_BASE}/reports/medicine-stock/`);
       setMedicineStockReport(res.data);
-    } catch (e) { console.error(e); alert('Error loading stock report'); }
+    } catch (e) { console.error(e); notify.error('Error loading stock report'); }
   };
 
   const loadLabSummaryReport = async () => {
     try {
       const res = await axios.get(`${API_BASE}/reports/lab-summary/`);
       setLabSummaryReport(res.data);
-    } catch (e) { console.error(e); alert('Error loading lab report'); }
+    } catch (e) { console.error(e); notify.error('Error loading lab report'); }
   };
 
   const loadDischargeReport = async () => {
     try {
       const res = await axios.get(`${API_BASE}/reports/discharge/`);
       setDischargeReport(res.data);
-    } catch (e) { console.error(e); alert('Error loading discharge report'); }
+    } catch (e) { console.error(e); notify.error('Error loading discharge report'); }
   };
 
 
@@ -1890,7 +1447,7 @@ export default function App() {
   // Handle IP Admission
   const handleAdmitPatient = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ipAdmissionForm.patient_id) return alert("Please select a patient");
+    if (!ipAdmissionForm.patient_id) return notify.warning("Please select a patient");
     try {
       // The bed is the source of truth now; ward/room are derived server-side
       // from it, so the client never sends free-text location.
@@ -1908,7 +1465,7 @@ export default function App() {
       loadAllData();
       loadIpdStructure();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Could not admit the patient.');
+      notify.error(err.response?.data?.detail || 'Could not admit the patient.');
     }
   };
 
@@ -1937,7 +1494,7 @@ export default function App() {
       panel_test_ids: labTestMasterForm.is_panel ? labPanelTestIds : [],
     };
     if (labTestMasterForm.is_panel && labPanelTestIds.length === 0) {
-      return alert('A panel must contain at least one test.');
+      return notify.warning('A panel must contain at least one test.');
     }
     try {
       if (selectedTestMasterId) {
@@ -1950,7 +1507,7 @@ export default function App() {
       resetLabTestMasterForm();
       loadAllData();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to save test');
+      notify.error(err.response?.data?.detail || 'Failed to save test');
     }
   };
 
@@ -1974,7 +1531,7 @@ export default function App() {
       await axios.put(`${API_BASE}/lab-test-masters/${test.id}/active?is_active=${!test.is_active}`);
       showToast(test.is_active ? 'Test deactivated' : 'Test activated');
       loadAllData();
-    } catch (err) { alert('Failed to change test status'); }
+    } catch (err) { notify.error('Failed to change test status'); }
   };
 
   const addLabParamRow = () => setLabParamRows(prev => [...prev, { name: '', unit: '', reference_range: '', data_type: 'Numeric' } as LabTestParameter]);
@@ -2046,7 +1603,7 @@ export default function App() {
       await axios.put(`${API_BASE}/lab-samples/${sampleId}/status?status=${encodeURIComponent(status)}`);
       showToast(`Sample marked ${status}`);
       loadAllData();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Failed to update sample status'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Failed to update sample status'); }
   };
 
   const handleUpdateLabOrderStatus = async (orderId: number, status: string) => {
@@ -2054,7 +1611,7 @@ export default function App() {
       await axios.put(`${API_BASE}/lab-orders/${orderId}/status?status=${encodeURIComponent(status)}`);
       loadAllData();
       loadLabStats();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Failed to update order status'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Failed to update order status'); }
   };
 
   const handleSaveEditOrder = async () => {
@@ -2067,12 +1624,12 @@ export default function App() {
       showToast('Order updated');
       setSelectedEditOrder(null);
       loadAllData();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Failed to update order'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Failed to update order'); }
   };
 
   const handleSaveCollectSample = async () => {
     if (!selectedCollectSampleOrder) return;
-    if (!collectSampleForm.sample_type.trim()) return alert('Sample type is required.');
+    if (!collectSampleForm.sample_type.trim()) return notify.warning('Sample type is required.');
     try {
       await axios.post(`${API_BASE}/lab-samples/`, {
         order_id: selectedCollectSampleOrder.id,
@@ -2088,13 +1645,13 @@ export default function App() {
       setSelectedCollectSampleOrder(null);
       loadAllData();
       loadLabStats();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Failed to collect sample'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Failed to collect sample'); }
   };
 
   const handleSaveResultEntry = async (isFinal: boolean) => {
     if (!selectedResultEntryOrder) return;
-    if (resultEntryForm.some(r => !r.parameter.trim())) return alert('Every row needs a parameter name.');
-    if (isFinal && resultEntryForm.every(r => !r.result.trim())) return alert('Enter at least one result value before verifying.');
+    if (resultEntryForm.some(r => !r.parameter.trim())) return notify.warning('Every row needs a parameter name.');
+    if (isFinal && resultEntryForm.every(r => !r.result.trim())) return notify.warning('Enter at least one result value before verifying.');
     try {
       await axios.post(`${API_BASE}/lab-orders/${selectedResultEntryOrder.id}/results`, {
         verify: isFinal,
@@ -2112,12 +1669,12 @@ export default function App() {
       setSelectedResultEntryOrder(null);
       loadAllData();
       loadLabStats();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Failed to save result'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Failed to save result'); }
   };
 
   /** Create one bill for several selected lab orders (panel-aware pricing). */
   const handleBillSelectedOrders = async () => {
-    if (selectedBillOrderIds.length === 0) return alert('Select at least one order to bill.');
+    if (selectedBillOrderIds.length === 0) return notify.warning('Select at least one order to bill.');
     try {
       const res = await axios.post(`${API_BASE}/billing/lab/from-orders`, {
         order_ids: selectedBillOrderIds,
@@ -2127,7 +1684,7 @@ export default function App() {
       setSelectedBillOrderIds([]);
       loadAllData();
       loadLabStats();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Failed to create lab bill'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Failed to create lab bill'); }
   };
 
   const toggleBillSelection = (orderId: number) =>
@@ -2142,8 +1699,8 @@ export default function App() {
 
   const handleCreateDirectLabOrders = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!labDirectOrderPatientId) return alert('No patient selected');
-    if (labDirectOrderForm.test_ids.length === 0) return alert('Select at least one test');
+    if (!labDirectOrderPatientId) return notify.warning('No patient selected');
+    if (labDirectOrderForm.test_ids.length === 0) return notify.warning('Select at least one test');
     try {
       const res = await axios.post(`${API_BASE}/lab-orders/bulk`, {
         patient_id: labDirectOrderPatientId,
@@ -2157,7 +1714,7 @@ export default function App() {
       setLabDirectOrderForm({ test_ids: [], referring_doctor: 'Walk-in / Self', priority: 'Routine' });
       loadAllData();
       loadLabStats();
-    } catch (err: any) { alert(err.response?.data?.detail || 'Failed to create lab orders'); }
+    } catch (err: any) { notify.error(err.response?.data?.detail || 'Failed to create lab orders'); }
   };
 
   /** Open a clean, print-isolated report window. */
@@ -2231,7 +1788,7 @@ export default function App() {
     </body></html>`;
 
     const win = window.open('', '_blank', 'width=900,height=1000');
-    if (!win) return alert('Please allow pop-ups to print the report.');
+    if (!win) return notify.warning('Please allow pop-ups to print the report.');
     win.document.write(html);
     win.document.close();
     win.focus();
@@ -2260,7 +1817,7 @@ export default function App() {
       showToast(`Token marked ${status}`);
       loadAllData();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to update the token.');
+      notify.error(err.response?.data?.detail || 'Failed to update the token.');
     }
   };
 
@@ -2271,13 +1828,13 @@ export default function App() {
       showToast(`Appointment ${status.toLowerCase()}`);
       loadAllData();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to update the appointment.');
+      notify.error(err.response?.data?.detail || 'Failed to update the appointment.');
     }
   };
 
   // Generate OP Token
   const handleGenerateToken = async () => {
-    if (!selectedPatientId) return alert("Please select a patient");
+    if (!selectedPatientId) return notify.warning("Please select a patient");
     try {
       await axios.post(`${API_BASE}/tokens/`, {
         patient_id: Number(selectedPatientId),
@@ -2286,7 +1843,7 @@ export default function App() {
         fee: opFee,
         details: tokenForm
       });
-      alert("Token generated successfully!");
+      notify.success("Token generated successfully!");
       loadAllData();
     } catch (err) {
       console.error(err);
@@ -2295,11 +1852,11 @@ export default function App() {
 
   // Prescriptions handling
   const addMedicineToPrescription = () => {
-    if (!newMed.medicine_id) return alert("Select a medicine");
+    if (!newMed.medicine_id) return notify.warning("Select a medicine");
     const stockItem = inventory.find(i => i.id === newMed.medicine_id);
     if (stockItem) {
       if (casesheetMeds.some(m => m.medicine_id === newMed.medicine_id)) {
-        return alert("Medicine already added to prescription!");
+        return notify.warning("Medicine already added to prescription!");
       }
       setCasesheetMeds([...casesheetMeds, { ...newMed, name: stockItem.name }]);
       setNewMed({ medicine_id: 0, quantity: 1, duration: '', instructions: '', timing_morning: false, timing_afternoon: false, timing_night: false, timing_relation: 'After Food' });
@@ -2329,10 +1886,10 @@ export default function App() {
   const handleSaveCasesheet = async (isFinal: boolean) => {
     // Drafts are session-local; only a final save needs an active consultation.
     if (!isFinal) {
-      alert("Draft saved locally for this session.");
+      notify.success("Draft saved locally for this session.");
       return;
     }
-    if (!selectedOPToken) return alert("Please select an active consultation");
+    if (!selectedOPToken) return notify.warning("Please select an active consultation");
     const activeToken = selectedOPToken;
 
     const combinedSymptoms = `Chief Complaint: ${casesheetForm.chiefComplaint}
@@ -2371,7 +1928,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
         })
       });
       if (res.ok) {
-        alert('Prescription Finalized successfully!');
+        notify.success('Prescription Finalized successfully!');
         setSelectedOPToken(null);
         setCasesheetForm({ vitalsBp: '', vitalsPulse: '', vitalsTemp: '', vitalsResp: '', chiefComplaint: '', hpi: '', pmh: '', familyHistory: '', allergies: '', clinicalFindings: '', diagnosis: '', icdCode: '', treatmentPlan: '', advice: '', followUpDate: '' });
         setCasesheetMeds([]);
@@ -2384,8 +1941,8 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
   };
 
   const handleOrderDoctorLabs = async () => {
-    if (!selectedDoctorPatientId) return alert("Please select a patient first.");
-    if (casesheetLabs.length === 0) return alert("Please select at least one lab test to order.");
+    if (!selectedDoctorPatientId) return notify.warning("Please select a patient first.");
+    if (casesheetLabs.length === 0) return notify.warning("Please select at least one lab test to order.");
     
     try {
       for (const testName of casesheetLabs) {
@@ -2400,17 +1957,17 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
           });
         }
       }
-      alert(`Successfully ordered ${casesheetLabs.length} lab tests.`);
+      notify.success(`Successfully ordered ${casesheetLabs.length} lab tests.`);
       setCasesheetLabs([]);
       loadAllData();
     } catch (err) {
       console.error(err);
-      alert("Failed to order labs.");
+      notify.error("Failed to order labs.");
     }
   };
 
   const handleCreateDirectConsultation = async (type: string) => {
-    if (!selectedDoctorPatientId) return alert("Please select a patient.");
+    if (!selectedDoctorPatientId) return notify.warning("Please select a patient.");
     try {
       const res = await axios.post(`${API_BASE}/tokens/`, {
         patient_id: selectedDoctorPatientId,
@@ -2419,23 +1976,23 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
         session: type, // "New Visit", "Follow-up", "Emergency"
         token_number: Math.floor(Math.random() * 1000)
       });
-      alert(`${type} Consultation Created!`);
+      notify.success(`${type} Consultation Created!`);
       loadAllData();
       setSelectedOPToken(res.data);
     } catch (err) {
       console.error(err);
-      alert("Failed to create consultation.");
+      notify.error("Failed to create consultation.");
     }
   };
   const handleLoadPrescription = async (patId: number) => {
     try {
       const res = await axios.get(`${API_BASE}/patients/${patId}/casesheets/`);
       const casesheets = res.data;
-      if (!casesheets || casesheets.length === 0) return alert("No casesheets found for this patient.");
+      if (!casesheets || casesheets.length === 0) return notify.warning("No casesheets found for this patient.");
       
       const latest = casesheets[0];
       if (!latest.prescribed_medicines || latest.prescribed_medicines.length === 0) {
-        return alert("No medicines prescribed in the latest casesheet.");
+        return notify.warning("No medicines prescribed in the latest casesheet.");
       }
 
       let newCart = [...billingCart];
@@ -2464,11 +2021,11 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
         }
       });
       setBillingCart(newCart);
-      alert(`Loaded ${loadedCount} medicines. ${missingList.length > 0 ? "Skipped: " + missingList.join(", ") : ""}`);
+      notify.info(`Loaded ${loadedCount} medicines. ${missingList.length > 0 ? "Skipped: " + missingList.join(", ") : ""}`);
 
     } catch (e) {
       console.error(e);
-      alert("Failed to load prescription.");
+      notify.error("Failed to load prescription.");
     }
   };
 
@@ -2483,7 +2040,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
         // Automatically add it to cart
         addToCart({ medicine_id: stockItem.id, quantity: 1 } as any, stockItem);
       } else {
-        alert("Barcode/Item not found in inventory!");
+        notify.warning("Barcode/Item not found in inventory!");
       }
       setBarcodeInput('');
     }
@@ -2493,18 +2050,18 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
     const isEvent = overrideItem && overrideItem.nativeEvent;
     const itemToAdd = (!overrideItem || isEvent) ? billingNewItem : overrideItem;
     
-    if (!itemToAdd.medicine_id || itemToAdd.quantity <= 0) return alert("Select medicine and quantity");
+    if (!itemToAdd.medicine_id || itemToAdd.quantity <= 0) return notify.warning("Select medicine and quantity");
     const stockItem = stockRef || inventory.find(i => i.id === itemToAdd.medicine_id);
     if (!stockItem) return;
     if (stockItem.quantity < itemToAdd.quantity) {
-      return alert(`Insufficient stock! Only ${stockItem.quantity} units left.`);
+      return notify.warning(`Insufficient stock! Only ${stockItem.quantity} units left.`);
     }
 
     // Check if item already in cart
     const existing = billingCart.find(i => i.medicine_id === itemToAdd.medicine_id);
     if (existing) {
       if (stockItem.quantity < (existing.quantity + itemToAdd.quantity)) {
-        return alert(`Cannot add. Exceeds available stock (${stockItem.quantity} units).`);
+        return notify.warning(`Cannot add. Exceeds available stock (${stockItem.quantity} units).`);
       }
       setBillingCart(billingCart.map(c => c.medicine_id === itemToAdd.medicine_id ? { ...c, quantity: c.quantity + itemToAdd.quantity } : c));
     } else {
@@ -2524,7 +2081,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
 
   // Submit Pharmacy Bill (Deducts stock automatically on backend)
   const handleCheckoutBill = async () => {
-    if (billingCart.length === 0) return alert("Cart is empty");
+    if (billingCart.length === 0) return notify.warning("Cart is empty");
     const payload = {
       patient_id: billingPatientType === 'registered' ? Number(billingPatientId) : null,
       patient_name: billingPatientType === 'walkin' ? billingWalkInName : null,
@@ -2537,7 +2094,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
 
     try {
       const response = await axios.post(`${API_BASE}/billing/pharmacy/`, payload);
-      alert(response.data.admission_id
+      notify.success(response.data.admission_id
         ? `Charged to admission #${response.data.admission_id}; it will be settled on the IP bill.`
         : "Pharmacy invoice generated and stock deducted successfully!");
       setBillingCart([]);
@@ -2546,7 +2103,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
       setActiveTab('reports');
       loadAllData();
     } catch (err: any) {
-      alert(err.response?.data?.detail || "Checkout failed");
+      notify.error(err.response?.data?.detail || "Checkout failed");
     }
   };
 
@@ -2556,7 +2113,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
     if (!inventoryForm.name) return;
     try {
       await axios.post(`${API_BASE}/inventory/`, inventoryForm);
-      alert("Inventory item added!");
+      notify.success("Inventory item added!");
       setInventoryForm({
         name: '', category: 'Pharmacy', batch_no: '', expiry_date: '', quantity: 0, unit_price: 0, min_stock_level: 10,
         details: {
@@ -2574,7 +2131,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
   // Process GRN (Stock In)
   const handleSaveGRN = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!grnForm.medicine_id) return alert("Please select a medicine.");
+    if (!grnForm.medicine_id) return notify.warning("Please select a medicine.");
     try {
       await axios.post(`${API_BASE}/inventory/adjust/`, {
         medicine_id: Number(grnForm.medicine_id),
@@ -2586,7 +2143,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
         batch_number: grnForm.type === 'Stock In' && grnForm.batch_number ? grnForm.batch_number : null,
         expiry_date: grnForm.type === 'Stock In' && grnForm.expiry_date ? grnForm.expiry_date : null,
       });
-      alert("Stock successfully updated (GRN processed)!");
+      notify.success("Stock successfully updated (GRN processed)!");
       setGrnForm({
         medicine_id: '', quantity: 1, type: 'Stock In', notes: '', batch_number: '', expiry_date: '',
         details: { supplierName: '', invoiceNumber: '', purchaseOrder: '' }
@@ -2594,7 +2151,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
       loadAllData();
     } catch (err) {
       console.error(err);
-      alert("Failed to process GRN.");
+      notify.error("Failed to process GRN.");
     }
   };
 
@@ -2631,25 +2188,25 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
       axios.defaults.headers.common['Authorization'] = `Bearer ${data.access_token}`;
     } catch (err: any) {
       if (err.response && err.response.status === 429) {
-        alert("Too many failed attempts. Account is temporarily locked.");
+        notify.error("Too many failed attempts. Account is temporarily locked.");
       } else {
-        alert("Invalid credentials or account locked.");
+        notify.error("Invalid credentials or account locked.");
       }
     }
   };
 
   const handleForgotPassword = () => {
-    alert("Please contact the Administrator to reset your password.");
+    notify.info("Please contact the Administrator to reset your password.");
   };
 
   const handlePatientRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     const f = registerForm;
-    if (!f.name.trim() || !f.username.trim()) return alert('Name and username are required.');
-    if (!/^[6-9]\d{9}$/.test(f.phone.replace(/\D/g, ''))) return alert('Enter a valid 10-digit mobile number.');
-    if (f.password !== f.confirm) return alert('The two passwords do not match.');
+    if (!f.name.trim() || !f.username.trim()) return notify.warning('Name and username are required.');
+    if (!/^[6-9]\d{9}$/.test(f.phone.replace(/\D/g, ''))) return notify.warning('Enter a valid 10-digit mobile number.');
+    if (f.password !== f.confirm) return notify.warning('The two passwords do not match.');
     if (f.password.length < 8 || !/[A-Z]/.test(f.password) || !/\d/.test(f.password)) {
-      return alert('Password must be at least 8 characters and include an uppercase letter and a digit.');
+      return notify.warning('Password must be at least 8 characters and include an uppercase letter and a digit.');
     }
     setRegisterBusy(true);
     try {
@@ -2672,7 +2229,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
       setAuthMode('login');
       showToast('Account created. Welcome!', 'success');
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Could not create your account.');
+      notify.error(err.response?.data?.detail || 'Could not create your account.');
     } finally {
       setRegisterBusy(false);
     }
@@ -2821,14 +2378,18 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
   }
 
   return (
-    <div className="app-container">
+    <div className={`app-container ${navOpen ? 'nav-open' : ''}`}>
       {/* Sidebar Navigation */}
       <div className="sidebar no-print">
         <div className="logo-container">
           <Activity size={28} className="logo-text" style={{ color: 'var(--accent-blue)' }} />
           <span className="logo-text">MEDBILL PRO</span>
         </div>
-        <nav className="nav-links">
+        <button className="nav-toggle" aria-label={navOpen ? 'Close menu' : 'Open menu'} aria-expanded={navOpen}
+          onClick={() => setNavOpen(o => !o)}>
+          {navOpen ? <X size={22} /> : <Menu size={22} />}
+        </button>
+        <nav className="nav-links" onClick={e => { if ((e.target as HTMLElement).closest('.nav-item')) setNavOpen(false); }}>
           {currentUser.role === 'Admin' && (
             <>
               <div className="nav-section-title" style={{fontSize:'10px', color:'var(--text-muted)', padding:'10px 20px', letterSpacing:'1px', marginTop:'10px'}}>ADMIN MODULES</div>
@@ -2993,14 +2554,23 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
         </div>
 
         {/* CHANGE MY PASSWORD */}
-        {isPasswordModalOpen && (
+        {(isPasswordModalOpen || currentUser.must_change_password) && (
           <div className="modal-overlay">
             <div className="modal-content" style={{ maxWidth: '440px' }}>
               <div className="modal-header">
-                <h2>Change my password</h2>
-                <button className="close-btn" onClick={() => setIsPasswordModalOpen(false)}><X size={20}/></button>
+                <h2>{currentUser.must_change_password ? 'Set your own password' : 'Change my password'}</h2>
+                {currentUser.must_change_password ? (
+                  <button className="close-btn" onClick={handleLogout} title="Sign out instead"><X size={20}/></button>
+                ) : (
+                  <button className="close-btn" onClick={() => setIsPasswordModalOpen(false)}><X size={20}/></button>
+                )}
               </div>
               <div className="modal-body">
+                {currentUser.must_change_password && (
+                  <p style={{ fontSize: '13px', marginTop: 0, color: 'var(--accent-amber)' }}>
+                    Your password was set by the system or an administrator. Choose your own before continuing.
+                  </p>
+                )}
                 <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: 0 }}>
                   Signed in as <b>{currentUser.username}</b>. Minimum 8 characters, with a letter, an uppercase letter and a digit.
                 </p>
@@ -3788,7 +3358,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                           <td>
                             <button className="btn btn-danger" style={{ padding: '4px 8px', fontSize: '12px' }}
                               onClick={async () => {
-                                if (!window.confirm(`Write off ${i.quantity} x ${i.name}?`)) return;
+                                if (!(await confirmDialog(`${i.quantity} × ${i.name} will be removed from stock.`, { title: 'Write off expired stock?', confirmLabel: 'Write off', danger: true }))) return;
                                 try {
                                   await axios.post(`${API_BASE}/inventory/adjust/`, {
                                     medicine_id: i.id, type: 'Stock Out', quantity: i.quantity,
@@ -3796,7 +3366,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                                   });
                                   showToast('Stock written off');
                                   loadAllData();
-                                } catch (err: any) { alert(err.response?.data?.detail || 'Failed to write off.'); }
+                                } catch (err: any) { notify.error(err.response?.data?.detail || 'Failed to write off.'); }
                               }}>Write off</button>
                           </td>
                         </tr>
@@ -4170,14 +3740,14 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                     <input type="text" value={appointmentForm.reason} onChange={e => setAppointmentForm({ ...appointmentForm, reason: e.target.value })} />
                   </div>
                   <button type="button" className="btn btn-primary" onClick={async () => {
-                    if(!appointmentForm.patient_id) return alert("Select patient");
+                    if(!appointmentForm.patient_id) return notify.warning("Select patient");
                     try {
                       await axios.post(`${API_BASE}/appointments/`, {
                         ...appointmentForm,
                         patient_id: Number(appointmentForm.patient_id),
                         doctor_id: appointmentForm.doctor_id ? Number(appointmentForm.doctor_id) : null
                       });
-                      alert("Appointment booked!");
+                      notify.success("Appointment booked!");
                       loadAllData();
                     } catch(e) { console.error(e); }
                   }}>
@@ -4792,7 +4362,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                               try {
                                 const res = await axios.get(`${API_BASE}/inventory/${item.id}/batches`);
                                 setBatchView({ item, batches: res.data });
-                              } catch (e: any) { alert(e.response?.data?.detail || 'Could not load batches.'); }
+                              } catch (e: any) { notify.error(e.response?.data?.detail || 'Could not load batches.'); }
                             }}>Batches</button>
                             <button className="btn btn-danger" style={{ padding: '4px 8px' }} onClick={() => handleDeleteMedicineStock(item.id)}><Trash2 size={12}/></button>
                           </td>
@@ -6313,8 +5883,8 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                                     }}><Printer size={16}/></button>
                                   )}
                                   {!locked && o.status !== 'Cancelled' && (
-                                    <button className="btn btn-danger" style={{padding: '5px 8px', fontSize: '11px'}} title="Cancel order" onClick={() => {
-                                      if (window.confirm(`Cancel lab order #${o.id}?`)) handleUpdateLabOrderStatus(o.id, 'Cancelled');
+                                    <button className="btn btn-danger" style={{padding: '5px 8px', fontSize: '11px'}} title="Cancel order" onClick={async () => {
+                                      if (await confirmDialog('A cancelled order cannot be reopened.', { title: `Cancel lab order #${o.id}?`, confirmLabel: 'Cancel order', danger: true })) handleUpdateLabOrderStatus(o.id, 'Cancelled');
                                     }}>Cancel</button>
                                   )}
                                 </div>
@@ -7978,7 +7548,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                   </div>
                   <input type="file" accept=".json" className="input-field" onChange={e => {
                     const file = e.target.files?.[0];
-                    if (file) { alert(`File "${file.name}" selected. Restore functionality requires manual admin review.`); }
+                    if (file) { notify.warning(`File "${file.name}" selected. Restore functionality requires manual admin review.`); }
                   }}/>
                   <button className="btn" style={{marginTop:'12px',display:'flex',alignItems:'center',gap:'8px',width:'100%',justifyContent:'center',background:'rgba(244,63,94,0.1)',color:'var(--accent-rose)',border:'1px solid rgba(244,63,94,0.3)'}}>
                     <UploadCloud size={18}/> Restore from Backup
@@ -8695,12 +8265,6 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
         </div>
       )}
 
-      {toast && (
-        <div style={{position:'fixed', bottom:'24px', right:'24px', zIndex:9999, background: toast.type === 'success' ? '#10b981' : '#ef4444', color:'#fff', padding:'12px 24px', borderRadius:'8px', display:'flex', alignItems:'center', gap:'8px', boxShadow:'0 4px 12px rgba(0,0,0,0.15)', animation:'slideIn 0.3s ease-out'}}>
-          {toast.type === 'success' ? <CheckCircle2 size={18}/> : <AlertTriangle size={18}/>}
-          <span style={{fontWeight:500}}>{toast.message}</span>
-        </div>
-      )}
     </div>
   );
 }

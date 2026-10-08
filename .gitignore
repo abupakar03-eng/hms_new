@@ -25,3 +25,9 @@ frontend/.env.local
 
 # Local database backups (python -m backend.backup)
 backups/
+
+# SQLite write-ahead log files (WAL mode)
+*.db-wal
+*.db-shm
+*.sqlite3-wal
+*.sqlite3-shm

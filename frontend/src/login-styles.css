@@ -132,3 +132,12 @@
   background: #fef2f2;
   border-color: #ef4444;
 }
+
+/* The login card is always light, so the theme's secondary button (light text
+   for the dark theme) was nearly invisible on it. */
+.login-card .btn-secondary {
+  background: #ffffff;
+  color: #1e293b;
+  border: 1px solid #cbd5e1;
+}
+.login-card .btn-secondary:hover { background: #f1f5f9; border-color: #94a3b8; }
