@@ -171,24 +171,34 @@ class TestSelfServicePassword:
         assert response.status_code == 422
 
     def test_change_then_restore(self, client, admin_headers):
+        # A dedicated account: a password change revokes the user's existing
+        # tokens, so rotating the shared admin would break admin_headers.
+        created = client.post(
+            "/users/", json={"username": "rotate_me", "password": "Admin@123", "role": "Doctor"},
+            headers=admin_headers,
+        )
+        assert created.status_code == 200, created.text
+        login = client.post("/login", data={"username": "rotate_me", "password": "Admin@123"})
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
         changed = client.post(
             "/users/me/password",
             json={"current_password": "Admin@123", "new_password": "RotatedPass9"},
-            headers=admin_headers,
+            headers=headers,
         )
         assert changed.status_code == 200, changed.text
 
-        assert client.post("/login", data={"username": "admin", "password": "Admin@123"}).status_code == 401
-        assert client.post("/login", data={"username": "admin", "password": "RotatedPass9"}).status_code == 200
+        assert client.post("/login", data={"username": "rotate_me", "password": "Admin@123"}).status_code == 401
+        relogin = client.post("/login", data={"username": "rotate_me", "password": "RotatedPass9"})
+        assert relogin.status_code == 200
 
-        # Put it back so the session-scoped admin_headers stay valid.
         restored = client.post(
             "/users/me/password",
             json={"current_password": "RotatedPass9", "new_password": "Admin@123"},
-            headers=admin_headers,
+            headers={"Authorization": f"Bearer {relogin.json()['access_token']}"},
         )
         assert restored.status_code == 200
-        assert client.post("/login", data={"username": "admin", "password": "Admin@123"}).status_code == 200
+        assert client.post("/login", data={"username": "rotate_me", "password": "Admin@123"}).status_code == 200
 
 
 class TestPatientPortal:

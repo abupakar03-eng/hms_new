@@ -40,7 +40,15 @@ APPOINTMENT_SLOTS = (
     "04:00 PM", "04:30 PM", "05:00 PM", "05:30 PM", "06:00 PM", "06:30 PM",
 )
 
-PAYMENT_MODES = ("Cash", "UPI", "Card", "Bank Transfer", "Split", "Insurance", "Cheque")
+PAYMENT_MODES = ("Cash", "UPI", "Card", "Bank Transfer", "Split", "Insurance", "Cheque", "IP Credit")
+
+# "IP Credit": a pharmacy sale charged to an inpatient admission and settled on
+# the final IP bill instead of at the counter.
+IP_CREDIT = "IP Credit"
+
+# OP / IP bill settlement. Pending/Partial/Paid are derived from amount_paid;
+# Cancelled is set explicitly and removes the bill from revenue.
+BILL_PAYMENT_STATUSES = ("Pending", "Partial", "Paid", "Cancelled")
 
 STOCK_CATEGORIES = ("Pharmacy", "Lab", "Consumable")
 

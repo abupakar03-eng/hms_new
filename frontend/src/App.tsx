@@ -92,7 +92,27 @@ interface MedicineStock {
   unit_price: number;
   min_stock_level: number;
   details?: Record<string, any>;
+  sellable_quantity?: number;
 }
+
+interface MedicineBatch {
+  id: number;
+  medicine_id: number;
+  batch_number: string;
+  expiry_date?: string | null;
+  quantity: number;
+  received_at: string;
+}
+
+interface BillSettlement {
+  payment_status?: 'Pending' | 'Partial' | 'Paid' | 'Cancelled';
+  amount_paid?: number;
+  amount_due?: number;
+  cancelled_reason?: string | null;
+}
+
+interface ClearanceCheck { key: string; label: string; status: 'ok' | 'warning' | 'info'; detail: string; }
+interface DischargeClearance { ready: boolean; outstanding_amount: number; unbilled_amount: number; checks: ClearanceCheck[]; }
 
 interface PharmacyBillItem {
   id?: number;
@@ -271,7 +291,7 @@ export interface LabStats {
   tat_compliance_percent: number;
 }
 
-interface OPBill {
+interface OPBill extends BillSettlement {
   id: number;
   patient_id: number;
   token_id?: number;
@@ -292,7 +312,7 @@ interface OPBill {
   patient?: Patient;
 }
 
-interface IPBill {
+interface IPBill extends BillSettlement {
   id: number;
   patient_id: number;
   admission_id?: number;
@@ -686,7 +706,12 @@ export default function App() {
   const [admissionDetailBusy, setAdmissionDetailBusy] = useState(false);
   const [transferTargetBedId, setTransferTargetBedId] = useState('');
   const [isDischargeOpen, setIsDischargeOpen] = useState(false);
-  const [dischargeForm, setDischargeForm] = useState({ discharge_type: 'Routine', require_summary: true });
+  const [dischargeForm, setDischargeForm] = useState({ discharge_type: 'Routine', require_summary: true, require_clearance: false });
+  const [dischargeClearance, setDischargeClearance] = useState<DischargeClearance | null>(null);
+  // Lab orders / pharmacy sales the IP bill will include (from GET .../bill-preview).
+  const [ipBillLinks, setIpBillLinks] = useState<{ lab_order_ids: number[]; pharmacy_bill_ids: number[] }>({ lab_order_ids: [], pharmacy_bill_ids: [] });
+  const [ipAmountPaid, setIpAmountPaid] = useState<string>('');
+  const [batchView, setBatchView] = useState<{ item: MedicineStock; batches: MedicineBatch[] } | null>(null);
   const [nursingForm, setNursingForm] = useState({
     shift: 'Morning', temperature: '', pulse: '', respiratory_rate: '',
     bp_systolic: '', bp_diastolic: '', spo2: '', pain_score: '', blood_sugar: '',
@@ -836,6 +861,8 @@ export default function App() {
   // Pharmacy Billing
   const [billingPatientType, setBillingPatientType] = useState<'walkin' | 'registered'>('walkin');
   const [billingPatientId, setBillingPatientId] = useState<number | ''>('');
+  // Set when the pharmacy is opened from an admission: the sale is charged to the stay.
+  const [billingAdmissionId, setBillingAdmissionId] = useState<number | null>(null);
   const [billingWalkInName, setBillingWalkInName] = useState('');
   const [billingCart, setBillingCart] = useState<{ medicine_id: number; name: string; quantity: number; unit_price: number }[]>([]);
   const [billingNewItem, setBillingNewItem] = useState({ medicine_id: 0, quantity: 1 });
@@ -856,7 +883,7 @@ export default function App() {
 
   // Inventory Stock In (GRN)
   const [grnForm, setGrnForm] = useState({
-    medicine_id: '', quantity: 1, type: 'Stock In', notes: '', 
+    medicine_id: '', quantity: 1, type: 'Stock In', notes: '', batch_number: '', expiry_date: '',
     details: { supplierName: '', invoiceNumber: '', purchaseOrder: '' }
   });
 
@@ -1045,8 +1072,22 @@ export default function App() {
     } catch (err: any) { alert(err.response?.data?.detail || 'Could not transfer the patient.'); }
   };
 
+  const openDischarge = async () => {
+    setIsDischargeOpen(true);
+    setDischargeClearance(null);
+    if (!admissionDetail?.id) return;
+    try {
+      const res = await axios.get(`${API_BASE}/ip-admissions/${admissionDetail.id}/discharge-clearance`);
+      setDischargeClearance(res.data);
+    } catch (e) { /* the checklist is advisory; discharge still works without it */ }
+  };
+
   const handleDischarge = async () => {
     if (!admissionDetail?.id) return;
+    if (dischargeClearance && !dischargeClearance.ready && !dischargeForm.require_clearance) {
+      const open = dischargeClearance.checks.filter(c => c.status === 'warning').map(c => `• ${c.label}: ${c.detail}`).join('\n');
+      if (!window.confirm(`Clearance is incomplete:\n${open}\n\nDischarge anyway? This is recorded in the audit trail.`)) return;
+    }
     try {
       await axios.post(`${API_BASE}/ip-admissions/${admissionDetail.id}/discharge`, dischargeForm);
       showToast('Patient discharged');
@@ -1196,11 +1237,16 @@ export default function App() {
       return alert('The new password must contain an uppercase letter and a digit.');
     }
     try {
-      await axios.post(`${API_BASE}/users/me/password`, {
+      const res = await axios.post(`${API_BASE}/users/me/password`, {
         current_password: passwordForm.current,
         new_password: passwordForm.next,
       });
-      showToast('Password updated. Sign in again on other devices.', 'success');
+      // The change revoked every earlier token, including this session's; continue on the new pair.
+      localStorage.setItem('token', res.data.access_token);
+      if (res.data.refresh_token) localStorage.setItem('refresh_token', res.data.refresh_token);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${res.data.access_token}`;
+      setToken(res.data.access_token);
+      showToast('Password updated. Other devices have been signed out.', 'success');
       setIsPasswordModalOpen(false);
       setPasswordForm({ current: '', next: '', confirm: '' });
     } catch (err: any) {
@@ -1618,17 +1664,66 @@ export default function App() {
         payment_mode: ipBillForm.payment_mode,
         payment_details: ipBillForm.payment_mode === 'Split' ? ipSplitPayment : null,
         notes: ipBillForm.notes || null,
+        // Only link when the bill is for the admission the preview was taken from.
+        lab_order_ids: ipBillForm.admission_id ? ipBillLinks.lab_order_ids : [],
+        pharmacy_bill_ids: ipBillForm.admission_id ? ipBillLinks.pharmacy_bill_ids : [],
+        amount_paid: ipAmountPaid === '' ? null : Number(ipAmountPaid),
       };
       const res = await axios.post(`${API_BASE}/billing/ip/`, payload);
       setViewBillDetail({...res.data, bill_type: 'ip'});
       alert('IP Bill created successfully!');
       setIpBillForm({ patient_id: '', admission_id: '', doctor_name: '', room_charge_per_day: 0, days_stayed: 1, doctor_charges: 0, nursing_charges: 0, pharmacy_charges: 0, lab_charges: 0, discount: 0, gst: 5, payment_mode: 'Cash', notes: '' });
       setIpOtherCharges([]);
+      setIpBillLinks({ lab_order_ids: [], pharmacy_bill_ids: [] });
+      setIpAmountPaid('');
       loadAllData();
     } catch (err: any) {
       alert(err.response?.data?.detail || 'Error creating IP bill');
     }
   };
+
+  // =================== BILL SETTLEMENT ===================
+  const handleCollectPayment = async (kind: 'op' | 'ip', bill: OPBill | IPBill) => {
+    const due = bill.amount_due ?? 0;
+    const entered = window.prompt(`Amount received for bill #${bill.id} (due ₹${due.toFixed(2)})`, due.toFixed(2));
+    if (entered === null) return;
+    const amount = Number(entered);
+    if (!amount || amount <= 0) return alert('Enter a positive amount.');
+    try {
+      await axios.post(`${API_BASE}/billing/${kind}/${bill.id}/payments`, { amount, payment_mode: bill.payment_mode === 'Split' ? 'Cash' : bill.payment_mode });
+      showToast('Payment recorded');
+      loadAllData();
+    } catch (err: any) { alert(err.response?.data?.detail || 'Could not record the payment.'); }
+  };
+
+  const handleCancelBill = async (kind: 'op' | 'ip', bill: OPBill | IPBill) => {
+    const reason = window.prompt(`Reason for cancelling bill #${bill.id}?`);
+    if (!reason) return;
+    try {
+      await axios.post(`${API_BASE}/billing/${kind}/${bill.id}/cancel`, { reason });
+      showToast('Bill cancelled');
+      loadAllData();
+    } catch (err: any) { alert(err.response?.data?.detail || 'Could not cancel the bill.'); }
+  };
+
+  const settlementBadge = (bill: BillSettlement) => {
+    const status = bill.payment_status || 'Paid';
+    const colors: Record<string, string> = { Paid: 'var(--accent-emerald)', Partial: 'var(--accent-amber, #d97706)', Pending: 'var(--accent-rose, #e11d48)', Cancelled: 'var(--text-muted)' };
+    return (
+      <span style={{ fontSize: '12px', fontWeight: 600, color: colors[status] }}>
+        {status}{(bill.amount_due ?? 0) > 0 ? ` · due ₹${(bill.amount_due ?? 0).toFixed(2)}` : ''}
+      </span>
+    );
+  };
+
+  const settlementActions = (kind: 'op' | 'ip', bill: OPBill | IPBill) => bill.payment_status === 'Cancelled' ? null : (
+    <>
+      {(bill.amount_due ?? 0) > 0 && (
+        <button style={{background:'none', border:'none', color:'var(--accent-emerald)', cursor:'pointer', fontSize:'13px'}} onClick={() => handleCollectPayment(kind, bill)}>₹ Collect</button>
+      )}
+      <button style={{background:'none', border:'none', color:'var(--text-muted)', cursor:'pointer', fontSize:'13px'}} onClick={() => handleCancelBill(kind, bill)}>✕ Cancel</button>
+    </>
+  );
 
   // =================== REPORTS ===================
   const loadDailyReport = async () => {
@@ -2433,6 +2528,8 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
     const payload = {
       patient_id: billingPatientType === 'registered' ? Number(billingPatientId) : null,
       patient_name: billingPatientType === 'walkin' ? billingWalkInName : null,
+      // Charged to the stay ("IP Credit") and settled on the final IP bill.
+      admission_id: billingPatientType === 'registered' && billingAdmissionId ? billingAdmissionId : null,
       discount: billingDiscount,
       gst: billingGst,
       items: billingCart.map(c => ({ medicine_id: c.medicine_id, quantity: c.quantity }))
@@ -2440,8 +2537,11 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
 
     try {
       const response = await axios.post(`${API_BASE}/billing/pharmacy/`, payload);
-      alert("Pharmacy invoice generated and stock deducted successfully!");
+      alert(response.data.admission_id
+        ? `Charged to admission #${response.data.admission_id}; it will be settled on the IP bill.`
+        : "Pharmacy invoice generated and stock deducted successfully!");
       setBillingCart([]);
+      setBillingAdmissionId(null);
       setViewInvoice(response.data);
       setActiveTab('reports');
       loadAllData();
@@ -2481,11 +2581,14 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
         type: grnForm.type,
         quantity: grnForm.quantity,
         notes: grnForm.notes,
-        details: grnForm.details
+        details: grnForm.details,
+        // Stock In with a batch number opens (or tops up) that batch for FEFO dispensing.
+        batch_number: grnForm.type === 'Stock In' && grnForm.batch_number ? grnForm.batch_number : null,
+        expiry_date: grnForm.type === 'Stock In' && grnForm.expiry_date ? grnForm.expiry_date : null,
       });
       alert("Stock successfully updated (GRN processed)!");
       setGrnForm({
-        medicine_id: '', quantity: 1, type: 'Stock In', notes: '',
+        medicine_id: '', quantity: 1, type: 'Stock In', notes: '', batch_number: '', expiry_date: '',
         details: { supplierName: '', invoiceNumber: '', purchaseOrder: '' }
       });
       loadAllData();
@@ -3568,6 +3671,20 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                           <option>Stock In</option><option>Return</option><option>Stock Out</option><option>Adjustment</option>
                         </select>
                       </div>
+                      {grnForm.type === 'Stock In' && (
+                        <>
+                          <div className="form-group">
+                            <label>Batch no.</label>
+                            <input type="text" value={grnForm.batch_number}
+                              onChange={e => setGrnForm({ ...grnForm, batch_number: e.target.value })} />
+                          </div>
+                          <div className="form-group">
+                            <label>Batch expiry</label>
+                            <input type="date" value={grnForm.expiry_date}
+                              onChange={e => setGrnForm({ ...grnForm, expiry_date: e.target.value })} />
+                          </div>
+                        </>
+                      )}
                       <div className="form-group">
                         <label>Supplier</label>
                         <input type="text" value={grnForm.details.supplierName}
@@ -4473,13 +4590,20 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                   ) : (
                     <div className="form-group">
                       <label>Select Registered Patient</label>
-                      <select value={billingPatientId} onChange={e => setBillingPatientId(e.target.value === '' ? '' : Number(e.target.value))}>
+                      <select value={billingPatientId} onChange={e => { setBillingAdmissionId(null); setBillingPatientId(e.target.value === '' ? '' : Number(e.target.value)); }}>
                         <option value="">-- Choose Patient --</option>
                         {patients.map(p => (
                           <option key={p.id} value={p.id}>{p.name}</option>
                         ))}
                       </select>
                     </div>
+                  )}
+
+                  {billingPatientType === 'registered' && billingAdmissionId && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}>
+                      <input type="checkbox" checked onChange={() => setBillingAdmissionId(null)} />
+                      Charge to admission #{billingAdmissionId} (IP Credit)
+                    </label>
                   )}
 
                   {billingPatientType === 'registered' && (
@@ -4647,7 +4771,14 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                           <td>{item.category}</td>
                           <td>{item.batch_no || 'N/A'}</td>
                           <td>{item.expiry_date || 'N/A'}</td>
-                          <td style={{ fontWeight: 600 }}>{item.quantity}</td>
+                          <td style={{ fontWeight: 600 }}>
+                            {item.quantity}
+                            {item.sellable_quantity !== undefined && item.sellable_quantity < item.quantity && (
+                              <div style={{ fontSize: '11px', color: 'var(--accent-rose, #e11d48)', fontWeight: 400 }}>
+                                {item.quantity - item.sellable_quantity} expired
+                              </div>
+                            )}
+                          </td>
                           <td>₹{item.unit_price.toFixed(2)}</td>
                           <td>
                             {item.quantity <= item.min_stock_level ? (
@@ -4657,6 +4788,12 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                             )}
                           </td>
                           <td>
+                            <button className="btn btn-secondary" style={{ padding: '4px 8px', marginRight: '6px' }} onClick={async () => {
+                              try {
+                                const res = await axios.get(`${API_BASE}/inventory/${item.id}/batches`);
+                                setBatchView({ item, batches: res.data });
+                              } catch (e: any) { alert(e.response?.data?.detail || 'Could not load batches.'); }
+                            }}>Batches</button>
                             <button className="btn btn-danger" style={{ padding: '4px 8px' }} onClick={() => handleDeleteMedicineStock(item.id)}><Trash2 size={12}/></button>
                           </td>
                         </tr>
@@ -4664,6 +4801,37 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                     </tbody>
                   </table>
                 </div>
+                {batchView && (
+                  <div style={{ marginTop: '14px', padding: '12px', border: '1px solid var(--border)', borderRadius: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>Batches — {batchView.item.name}</strong>
+                      <button className="btn btn-secondary" style={{ padding: '4px 10px' }} onClick={() => setBatchView(null)}>Close</button>
+                    </div>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '6px 0' }}>
+                      Sold first-expiry-first-out. Stock received before batch tracking is shown as “Unbatched”. Receive new batches through the GRN form.
+                    </p>
+                    <table>
+                      <thead><tr><th>Batch</th><th>Expiry</th><th>Qty</th><th>Received</th></tr></thead>
+                      <tbody>
+                        {batchView.batches.map(b => {
+                          const expired = !!b.expiry_date && new Date(b.expiry_date) < new Date(new Date().toDateString());
+                          return (
+                            <tr key={b.id} style={expired ? { color: 'var(--accent-rose, #e11d48)' } : undefined}>
+                              <td>{b.batch_number}</td><td>{b.expiry_date || '—'}{expired ? ' (expired)' : ''}</td>
+                              <td>{b.quantity}</td><td>{new Date(b.received_at).toLocaleDateString('en-IN')}</td>
+                            </tr>
+                          );
+                        })}
+                        {(() => {
+                          const unbatched = batchView.item.quantity - batchView.batches.reduce((s, b) => s + b.quantity, 0);
+                          return unbatched > 0 ? (
+                            <tr><td>Unbatched{batchView.item.batch_no ? ` (${batchView.item.batch_no})` : ''}</td><td>{batchView.item.expiry_date || '—'}</td><td>{unbatched}</td><td>—</td></tr>
+                          ) : null;
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
 
               <div className="glass-card">
@@ -4746,6 +4914,14 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                     <div className="form-group">
                       <label>Quantity Received *</label>
                       <input type="number" min="1" value={grnForm.quantity || ''} onChange={e => setGrnForm({ ...grnForm, quantity: Number(e.target.value) })} required />
+                    </div>
+                    <div className="form-group">
+                      <label>Batch no.</label>
+                      <input type="text" value={grnForm.batch_number} onChange={e => setGrnForm({ ...grnForm, batch_number: e.target.value })} />
+                    </div>
+                    <div className="form-group">
+                      <label>Batch expiry</label>
+                      <input type="date" value={grnForm.expiry_date} onChange={e => setGrnForm({ ...grnForm, expiry_date: e.target.value })} />
                     </div>
                     <div className="form-group">
                       <label>Supplier Name</label>
@@ -5351,19 +5527,25 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                               <button className="btn btn-secondary" style={{padding:'4px 8px', fontSize:'12px'}} onClick={() => {
                                 setBillingPatientType('registered');
                                 setBillingPatientId(adm.patient_id);
+                                setBillingAdmissionId(adm.id);
                                 setActiveTab('pharmacy');
                               }}>Pharmacy</button>
                               <button className="btn btn-secondary" style={{padding:'4px 8px', fontSize:'12px'}} onClick={async () => {
-                                // The server prices the whole stay (every bed, including after
-                                // discharge when there is no current bed); fall back to the bed rate.
-                                let roomPerDay = adm.bed?.daily_charge ?? ipBillForm.room_charge_per_day;
-                                let days = ipBillForm.days_stayed;
+                                // The server prices the stay: room charge across every bed, plus the
+                                // lab work and IP-credit pharmacy sales not yet on any bill.
+                                let next = {...ipBillForm, patient_id: String(adm.patient_id), admission_id: String(adm.id),
+                                            room_charge_per_day: adm.bed?.daily_charge ?? ipBillForm.room_charge_per_day};
+                                let links = { lab_order_ids: [] as number[], pharmacy_bill_ids: [] as number[] };
                                 try {
-                                  const res = await axios.get(`${API_BASE}/ip-admissions/${adm.id}/detail`);
-                                  days = Math.max(res.data.length_of_stay_days ?? 1, 1);
-                                  roomPerDay = Math.round((res.data.billable_room_charge / days) * 100) / 100;
-                                } catch (e) { /* keep the fallback */ }
-                                setIpBillForm({...ipBillForm, patient_id: String(adm.patient_id), admission_id: String(adm.id), room_charge_per_day: roomPerDay, days_stayed: days});
+                                  const res = await axios.get(`${API_BASE}/ip-admissions/${adm.id}/bill-preview`);
+                                  const p = res.data;
+                                  next = {...next, room_charge_per_day: p.room_charge_per_day, days_stayed: p.days_stayed,
+                                          lab_charges: p.lab_charges, pharmacy_charges: p.pharmacy_charges};
+                                  links = { lab_order_ids: p.lab_order_ids, pharmacy_bill_ids: p.pharmacy_bill_ids };
+                                  if (p.existing_ip_bills?.length) showToast(`Note: IP bill #${p.existing_ip_bills.join(', #')} already exists for this stay.`);
+                                } catch (e) { /* keep the bed-rate fallback */ }
+                                setIpBillLinks(links);
+                                setIpBillForm(next);
                                 setBillingTab('ip');
                                 setActiveTab('billing');
                               }}>IP Bill</button>
@@ -6948,7 +7130,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                       </div>
                       <div className="form-group">
                         <label>Admission (Optional)</label>
-                        <select value={ipBillForm.admission_id} onChange={e => setIpBillForm({...ipBillForm, admission_id: e.target.value})}>
+                        <select value={ipBillForm.admission_id} onChange={e => { setIpBillLinks({ lab_order_ids: [], pharmacy_bill_ids: [] }); setIpBillForm({...ipBillForm, admission_id: e.target.value}); }}>
                           <option value="">Select Admission</option>
                           {ipAdmissions.filter(a => !ipBillForm.patient_id || a.patient_id === Number(ipBillForm.patient_id)).map(a => <option key={a.id} value={a.id}>#{a.id} | {a.ward_number} | {a.room_number} | {a.status}</option>)}
                         </select>
@@ -7023,7 +7205,18 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                           <option>Cash</option><option>UPI</option><option>Card</option><option>Bank Transfer</option><option>Split</option>
                         </select>
                       </div>
+                      <div className="form-group">
+                        <label>Collected now (₹)</label>
+                        <input type="number" min="0" step="0.01" placeholder="Blank = paid in full" value={ipAmountPaid}
+                          onChange={e => setIpAmountPaid(e.target.value)} />
+                      </div>
                     </div>
+                    {(ipBillLinks.lab_order_ids.length > 0 || ipBillLinks.pharmacy_bill_ids.length > 0) && (
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: 0 }}>
+                        Includes {ipBillLinks.lab_order_ids.length} lab order(s) and {ipBillLinks.pharmacy_bill_ids.length} pharmacy
+                        sale(s) from this stay; they will be locked to this bill.
+                      </p>
+                    )}
 
                     {ipBillForm.payment_mode === 'Split' && (
                       <div className="glass-card" style={{background:'rgba(139,92,246,0.08)', border:'1px solid rgba(139,92,246,0.3)', marginBottom:'16px'}}>
@@ -7086,8 +7279,8 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                             <td>{b.doctor_name || '-'}</td>
                             <td>{new Date(b.bill_date).toLocaleDateString('en-IN')}</td>
                             <td style={{color:'var(--accent-emerald)', fontWeight:'600'}}>₹{b.total.toFixed(2)}</td>
-                            <td><span style={{padding:'2px 10px', borderRadius:'12px', fontSize:'12px', background:'rgba(59,130,246,0.2)', color:'var(--accent-blue-soft)'}}>{b.payment_mode}</span></td>
-                            <td><button style={{background:'none', border:'none', color:'var(--accent-blue)', cursor:'pointer', fontSize:'13px'}} onClick={() => printInvoice(b, 'op')}>🖨 Print</button></td>
+                            <td><span style={{padding:'2px 10px', borderRadius:'12px', fontSize:'12px', background:'rgba(59,130,246,0.2)', color:'var(--accent-blue-soft)'}}>{b.payment_mode}</span> {settlementBadge(b)}</td>
+                            <td><button style={{background:'none', border:'none', color:'var(--accent-blue)', cursor:'pointer', fontSize:'13px'}} onClick={() => printInvoice(b, 'op')}>🖨 Print</button>{settlementActions('op', b)}</td>
                           </tr>
                         );
                       })}
@@ -7118,8 +7311,8 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                             <td>{b.days_stayed}</td>
                             <td>{new Date(b.bill_date).toLocaleDateString('en-IN')}</td>
                             <td style={{color:'var(--accent-violet)', fontWeight:'600'}}>₹{b.total.toFixed(2)}</td>
-                            <td><span style={{padding:'2px 10px', borderRadius:'12px', fontSize:'12px', background:'rgba(139,92,246,0.2)', color:'var(--accent-violet-soft)'}}>{b.payment_mode}</span></td>
-                            <td><button style={{background:'none', border:'none', color:'var(--accent-violet)', cursor:'pointer', fontSize:'13px'}} onClick={() => printInvoice(b, 'ip')}>🖨 Print</button></td>
+                            <td><span style={{padding:'2px 10px', borderRadius:'12px', fontSize:'12px', background:'rgba(139,92,246,0.2)', color:'var(--accent-violet-soft)'}}>{b.payment_mode}</span> {settlementBadge(b)}</td>
+                            <td><button style={{background:'none', border:'none', color:'var(--accent-violet)', cursor:'pointer', fontSize:'13px'}} onClick={() => printInvoice(b, 'ip')}>🖨 Print</button>{settlementActions('ip', b)}</td>
                           </tr>
                         );
                       })}
@@ -8164,7 +8357,7 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                           <button className="btn btn-secondary" onClick={handleTransferBed} disabled={!transferTargetBedId}>
                             <ArrowRightCircle size={16} /> Transfer
                           </button>
-                          <button className="btn btn-primary" onClick={() => setIsDischargeOpen(true)}>
+                          <button className="btn btn-primary" onClick={openDischarge}>
                             <CheckCircle2 size={16} /> Discharge patient
                           </button>
                         </div>
@@ -8175,6 +8368,18 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                               A discharge summary is required. Save one below, or switch the requirement off to
                               discharge immediately.
                             </p>
+                            <div style={{ marginBottom: '10px' }}>
+                              <strong style={{ fontSize: '13px' }}>
+                                Discharge clearance {dischargeClearance ? (dischargeClearance.ready ? '— ready' : '— items open') : '— loading…'}
+                              </strong>
+                              <ul style={{ margin: '6px 0 0', paddingLeft: '18px', fontSize: '13px' }}>
+                                {(dischargeClearance?.checks || []).map(c => (
+                                  <li key={c.key} style={{ color: c.status === 'warning' ? 'var(--accent-rose, #e11d48)' : c.status === 'info' ? 'var(--text-muted)' : 'var(--accent-emerald)' }}>
+                                    {c.status === 'ok' ? '✓' : c.status === 'info' ? 'ℹ' : '⚠'} {c.label}: {c.detail}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
                             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                               <select value={dischargeForm.discharge_type}
                                 onChange={e => setDischargeForm({ ...dischargeForm, discharge_type: e.target.value })}>
@@ -8184,6 +8389,11 @@ Follow-up: ${casesheetForm.followUpDate}`.trim();
                                 <input type="checkbox" checked={dischargeForm.require_summary}
                                   onChange={e => setDischargeForm({ ...dischargeForm, require_summary: e.target.checked })} />
                                 Require a saved summary
+                              </label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}>
+                                <input type="checkbox" checked={dischargeForm.require_clearance}
+                                  onChange={e => setDischargeForm({ ...dischargeForm, require_clearance: e.target.checked })} />
+                                Block until clearance is complete
                               </label>
                               <button className="btn btn-danger" onClick={handleDischarge}>Confirm discharge</button>
                               <button className="btn btn-secondary" onClick={() => setIsDischargeOpen(false)}>Cancel</button>

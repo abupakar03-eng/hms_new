@@ -139,6 +139,13 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class PasswordChangeResponse(Token):
+    """A password change revokes every earlier token, the caller's included, so the
+    caller's session continues on the fresh pair returned here."""
+
+    message: str
+
+
 class LogoutRequest(BaseModel):
     refresh_token: Optional[str] = None
 
@@ -393,6 +400,8 @@ class MedicineStock(MedicineStockBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    # Units that may be dispensed today (excludes expired batches).
+    sellable_quantity: Optional[int] = None
 
 
 class StockTransactionCreate(BaseModel):
@@ -401,6 +410,28 @@ class StockTransactionCreate(BaseModel):
     quantity: int = Field(..., gt=0)
     notes: Optional[str] = None
     details: Dict[str, Any] = Field(default_factory=dict)
+    # Stock In: receive into this batch (created if new). Return/Adjustment/Stock
+    # Out: act on a specific existing batch.
+    batch_number: Optional[str] = Field(None, min_length=1, max_length=60)
+    expiry_date: Optional[date] = None
+    batch_id: Optional[int] = None
+
+
+class MedicineBatchCreate(BaseModel):
+    batch_number: str = Field(..., min_length=1, max_length=60)
+    expiry_date: Optional[date] = None
+    quantity: int = Field(..., gt=0)
+    notes: Optional[str] = None
+
+
+class MedicineBatchResponse(ORMModel):
+    id: int
+    medicine_id: int
+    batch_number: str
+    expiry_date: Optional[date] = None
+    quantity: int
+    received_at: datetime
+    notes: Optional[str] = None
 
 
 # ----------------- PHARMACY BILL SCHEMAS -----------------
@@ -416,11 +447,14 @@ class PharmacyBillItemResponse(ORMModel):
     quantity: int
     unit_price: float
     total_price: float
+    batches: Optional[List[Dict[str, Any]]] = None
 
 
 class PharmacyBillCreate(BaseModel):
     patient_id: Optional[int] = None
     patient_name: Optional[str] = None
+    # Charge the sale to this current admission (settled on the final IP bill).
+    admission_id: Optional[int] = None
     discount: float = Field(0.0, ge=0, le=100)
     gst: float = Field(0.0, ge=0, le=100)
     payment_mode: PaymentMode = "Cash"
@@ -441,6 +475,8 @@ class PharmacyBillResponse(ORMModel):
     payment_mode: str = "Cash"
     payment_details: Optional[Any] = None
     details: Dict[str, Any] = Field(default_factory=dict)
+    admission_id: Optional[int] = None
+    ip_bill_id: Optional[int] = None
     items: List[PharmacyBillItemResponse] = Field(default_factory=list)
     patient: Optional[PatientBrief] = None
 
@@ -820,6 +856,8 @@ class OPBillCreate(BaseModel):
     payment_mode: PaymentMode = "Cash"
     payment_details: Optional[Dict[str, float]] = None
     notes: Optional[str] = None
+    # Collected now. Omitted = paid in full at the counter (the previous behaviour).
+    amount_paid: Optional[float] = Field(None, ge=0)
 
 
 class OPBillResponse(ORMModel):
@@ -840,6 +878,11 @@ class OPBillResponse(ORMModel):
     payment_mode: str
     payment_details: Optional[Dict[str, float]] = None
     notes: Optional[str] = None
+    payment_status: str = "Paid"
+    amount_paid: float = 0.0
+    amount_due: float = 0.0
+    payment_history: List[Dict[str, Any]] = Field(default_factory=list)
+    cancelled_reason: Optional[str] = None
     patient: Optional[PatientBrief] = None
 
 
@@ -859,6 +902,11 @@ class IPBillCreate(BaseModel):
     payment_mode: PaymentMode = "Cash"
     payment_details: Optional[Dict[str, float]] = None
     notes: Optional[str] = None
+    # Collected now. Omitted = paid in full at the counter (the previous behaviour).
+    amount_paid: Optional[float] = Field(None, ge=0)
+    # Charges raised during the stay that this bill includes (see GET .../bill-preview).
+    lab_order_ids: List[int] = Field(default_factory=list)
+    pharmacy_bill_ids: List[int] = Field(default_factory=list)
 
 
 class IPBillResponse(ORMModel):
@@ -882,6 +930,11 @@ class IPBillResponse(ORMModel):
     payment_mode: str
     payment_details: Optional[Dict[str, float]] = None
     notes: Optional[str] = None
+    payment_status: str = "Paid"
+    amount_paid: float = 0.0
+    amount_due: float = 0.0
+    payment_history: List[Dict[str, Any]] = Field(default_factory=list)
+    cancelled_reason: Optional[str] = None
     patient: Optional[PatientBrief] = None
 
 
@@ -999,6 +1052,7 @@ class DashboardStats(BaseModel):
     total_patients: int
     active_ip: int
     low_stock_count: int
+    outstanding_dues: float = 0.0
 
 
 class ChartDataPoint(BaseModel):
@@ -1542,6 +1596,50 @@ class DischargeRequest(BaseModel):
     discharge_date: Optional[datetime] = None
     summary: Optional["DischargeSummaryCreate"] = None
     require_summary: bool = True
+    # When true, refuse while the clearance checklist has open (warning) items.
+    # Either way the open items are written to the audit trail.
+    require_clearance: bool = False
+
+
+class ClearanceCheck(BaseModel):
+    key: str
+    label: str
+    status: Literal["ok", "warning", "info"]
+    detail: str
+
+
+class DischargeClearance(BaseModel):
+    admission_id: int
+    status: str
+    ready: bool
+    outstanding_amount: float
+    unbilled_amount: float
+    checks: List[ClearanceCheck]
+
+
+class IPBillPreview(BaseModel):
+    admission_id: int
+    patient_id: int
+    days_stayed: int
+    room_charge_per_day: float
+    room_charges: float
+    lab_charges: float
+    lab_order_ids: List[int]
+    lab_lines: List[Dict[str, Any]]
+    pharmacy_charges: float
+    pharmacy_bill_ids: List[int]
+    pharmacy_lines: List[Dict[str, Any]]
+    existing_ip_bills: List[int]
+
+
+class BillPaymentCreate(BaseModel):
+    amount: float = Field(..., gt=0)
+    payment_mode: PaymentMode = "Cash"
+    notes: Optional[str] = None
+
+
+class BillCancelRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=300)
 
 
 class IPAdmission(IPAdmissionBase):

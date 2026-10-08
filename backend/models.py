@@ -378,6 +378,45 @@ class MedicineStock(Base):
     min_stock_level = Column(Integer, default=10)
     details = Column(JSON, default=dict)
 
+    # ``quantity`` stays the item total. Batches account for part (or, for stock
+    # received after batch tracking, all) of it; any remainder is legacy
+    # "unbatched" stock governed by the item-level ``expiry_date``.
+    batches = relationship(
+        "MedicineBatch", back_populates="medicine", cascade="all, delete-orphan",
+        order_by="MedicineBatch.expiry_date",
+    )
+
+    @property
+    def sellable_quantity(self) -> int:
+        """Units that may be dispensed today: everything except expired lots."""
+        from datetime import date
+
+        today = date.today()
+        batched = sum(b.quantity or 0 for b in self.batches)
+        sellable = sum(
+            b.quantity or 0 for b in self.batches if b.expiry_date is None or b.expiry_date >= today
+        )
+        unbatched = max((self.quantity or 0) - batched, 0)
+        if self.expiry_date is None or self.expiry_date >= today:
+            sellable += unbatched
+        return sellable
+
+
+class MedicineBatch(Base):
+    """One received lot of a stock item, sold first-expiry-first-out."""
+
+    __tablename__ = "medicine_batches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    medicine_id = Column(Integer, ForeignKey("medicine_stocks.id"), nullable=False, index=True)
+    batch_number = Column(String, nullable=False)
+    expiry_date = Column(Date, nullable=True, index=True)
+    quantity = Column(Integer, nullable=False, default=0)
+    received_at = Column(DateTime, default=utcnow, nullable=False)
+    notes = Column(String, nullable=True)
+
+    medicine = relationship("MedicineStock", back_populates="batches")
+
 
 class StockTransaction(Base):
     __tablename__ = "stock_transactions"
@@ -406,6 +445,11 @@ class PharmacyBill(Base):
     payment_details = Column(JSON, nullable=True)
     details = Column(JSON, default=dict)
 
+    # Set when the sale is charged to an inpatient stay (payment_mode "IP Credit");
+    # ``ip_bill_id`` is filled once the final IP bill includes it.
+    admission_id = Column(Integer, ForeignKey("ip_admissions.id"), nullable=True, index=True)
+    ip_bill_id = Column(Integer, ForeignKey("ip_bills.id"), nullable=True, index=True)
+
     patient = relationship("Patient", back_populates="pharmacy_bills")
     items = relationship("PharmacyBillItem", back_populates="bill", cascade="all, delete-orphan")
 
@@ -420,6 +464,8 @@ class PharmacyBillItem(Base):
     quantity = Column(Integer, nullable=False)
     unit_price = Column(Float, nullable=False)
     total_price = Column(Float, nullable=False)
+    # Which batches the units came from: [{batch_id, batch_number, expiry_date, quantity}]
+    batches = Column(JSON, nullable=True)
 
     bill = relationship("PharmacyBill", back_populates="items")
 
@@ -755,6 +801,8 @@ class LabOrder(ClinicalAuditMixin, Base):
     doctor_name = Column(String, nullable=True)
     test_id = Column(Integer, ForeignKey("lab_test_master.id"), nullable=False, index=True)
     bill_id = Column(Integer, ForeignKey("lab_bills.id"), nullable=True, index=True)
+    # Billed on an inpatient's final bill instead of a separate lab bill.
+    ip_bill_id = Column(Integer, ForeignKey("ip_bills.id"), nullable=True, index=True)
     panel_id = Column(Integer, ForeignKey("lab_test_master.id"), nullable=True)
     order_date = Column(DateTime, default=utcnow, index=True)
     status = Column(String, default="Pending", nullable=False, index=True)
@@ -851,6 +899,19 @@ class OPBill(Base):
     payment_details = Column(JSON, nullable=True)
     notes = Column(Text, nullable=True)
 
+    # Settlement. Bills created before payment tracking were collected at the
+    # counter, so the migration backfills them as Paid in full.
+    payment_status = Column(String, default="Paid", nullable=False, index=True)
+    amount_paid = Column(Float, default=0.0, nullable=False)
+    payment_history = Column(JSON, default=list)  # [{amount, payment_mode, at, by}]
+    cancelled_reason = Column(String, nullable=True)
+
+    @property
+    def amount_due(self) -> float:
+        if self.payment_status == "Cancelled":
+            return 0.0
+        return round(max((self.total or 0.0) - (self.amount_paid or 0.0), 0.0), 2)
+
     patient = relationship("Patient", back_populates="op_bills")
 
 
@@ -880,6 +941,19 @@ class IPBill(Base):
     payment_mode = Column(String, default="Cash")
     payment_details = Column(JSON, nullable=True)
     notes = Column(Text, nullable=True)
+
+    # Settlement. Bills created before payment tracking were collected at the
+    # counter, so the migration backfills them as Paid in full.
+    payment_status = Column(String, default="Paid", nullable=False, index=True)
+    amount_paid = Column(Float, default=0.0, nullable=False)
+    payment_history = Column(JSON, default=list)  # [{amount, payment_mode, at, by}]
+    cancelled_reason = Column(String, nullable=True)
+
+    @property
+    def amount_due(self) -> float:
+        if self.payment_status == "Cancelled":
+            return 0.0
+        return round(max((self.total or 0.0) - (self.amount_paid or 0.0), 0.0), 2)
 
     patient = relationship("Patient", back_populates="ip_bills")
     admission = relationship("IPAdmission", back_populates="ip_bills")

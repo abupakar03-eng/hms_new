@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from typing import Iterable, List, Optional
 
 from fastapi import HTTPException, status as http_status
-from sqlalchemy import String, case, cast, func, or_
+from sqlalchemy import String, and_, case, cast, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
@@ -505,8 +505,27 @@ def get_medicine_stocks(db: Session, category: Optional[str] = None):
 
 def update_medicine_quantity(db: Session, transaction: schemas.StockTransactionCreate):
     db_item = _get_or_404(db, models.MedicineStock, transaction.medicine_id, "Stock item")
+    details = dict(transaction.details or {})
 
-    if transaction.type in ("Stock In", "Return"):
+    def batch_by_id():
+        batch = next((b for b in db_item.batches if b.id == transaction.batch_id), None)
+        if batch is None:
+            raise HTTPException(status_code=404, detail="Batch not found for this item.")
+        return batch
+
+    if transaction.type == "Stock In":
+        if transaction.batch_number:
+            batch = _receive_into_batch(
+                db, db_item, transaction.batch_number, transaction.expiry_date, transaction.quantity, transaction.notes
+            )
+            details.update({"batch_id": batch.id, "batch_number": batch.batch_number})
+        else:
+            db_item.quantity += transaction.quantity
+    elif transaction.type == "Return":
+        if transaction.batch_id is not None:
+            batch = batch_by_id()
+            batch.quantity += transaction.quantity
+            details.update({"batch_id": batch.id, "batch_number": batch.batch_number})
         db_item.quantity += transaction.quantity
     elif transaction.type in ("Stock Out", "Sale"):
         if db_item.quantity < transaction.quantity:
@@ -514,9 +533,20 @@ def update_medicine_quantity(db: Session, transaction: schemas.StockTransactionC
                 status_code=400,
                 detail=f"Insufficient stock for {db_item.name}. Remaining: {db_item.quantity}",
             )
-        db_item.quantity -= transaction.quantity
+        # A stock-out (write-off, breakage) may remove expired units; a sale may not.
+        details["allocations"] = _consume_stock(
+            db_item, transaction.quantity,
+            include_expired=transaction.type == "Stock Out", batch_id=transaction.batch_id,
+        )
     elif transaction.type == "Adjustment":
-        db_item.quantity = transaction.quantity
+        if transaction.batch_id is not None:
+            batch = batch_by_id()
+            db_item.quantity += transaction.quantity - batch.quantity
+            batch.quantity = transaction.quantity
+            details.update({"batch_id": batch.id, "batch_number": batch.batch_number})
+        else:
+            _assert_total_covers_batches(db_item, transaction.quantity)
+            db_item.quantity = transaction.quantity
 
     db.add(
         models.StockTransaction(
@@ -524,7 +554,7 @@ def update_medicine_quantity(db: Session, transaction: schemas.StockTransactionC
             type=transaction.type,
             quantity=transaction.quantity,
             notes=transaction.notes,
-            details=transaction.details or {},
+            details=details,
         )
     )
     db.commit()
@@ -532,9 +562,21 @@ def update_medicine_quantity(db: Session, transaction: schemas.StockTransactionC
     return db_item
 
 
+def _assert_total_covers_batches(item: models.MedicineStock, new_total: int) -> None:
+    held = _batch_total(item)
+    if new_total < held:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Batches of {item.name} hold {held} unit(s); adjust the individual batch instead.",
+        )
+
+
 def update_medicine_stock(db: Session, stock_id: int, stock_update: schemas.MedicineStockUpdate):
     db_stock = _get_or_404(db, models.MedicineStock, stock_id, "Medicine stock")
-    for key, value in stock_update.model_dump(exclude_unset=True).items():
+    data = stock_update.model_dump(exclude_unset=True)
+    if data.get("quantity") is not None:
+        _assert_total_covers_batches(db_stock, data["quantity"])
+    for key, value in data.items():
         setattr(db_stock, key, value)
     db.commit()
     db.refresh(db_stock)
@@ -560,13 +602,141 @@ def low_stock_items(db: Session):
 
 
 def expiring_items(db: Session, within_days: int = 90):
+    """Items with any stock (item-level or a batch) expiring on or before the cutoff."""
     cutoff = (datetime.utcnow() + timedelta(days=within_days)).date()
+    batch_items = (
+        db.query(models.MedicineBatch.medicine_id)
+        .filter(
+            models.MedicineBatch.quantity > 0,
+            models.MedicineBatch.expiry_date.isnot(None),
+            models.MedicineBatch.expiry_date <= cutoff,
+        )
+    )
     return (
         db.query(models.MedicineStock)
-        .filter(models.MedicineStock.expiry_date.isnot(None), models.MedicineStock.expiry_date <= cutoff)
+        .filter(
+            or_(
+                and_(models.MedicineStock.expiry_date.isnot(None), models.MedicineStock.expiry_date <= cutoff),
+                models.MedicineStock.id.in_(batch_items),
+            )
+        )
         .order_by(models.MedicineStock.expiry_date)
         .all()
     )
+
+
+# ============================
+# Batches (first-expiry-first-out)
+# ============================
+def _batch_total(item: models.MedicineStock) -> int:
+    return sum(b.quantity or 0 for b in item.batches)
+
+
+def _stock_lots(item: models.MedicineStock, include_expired: bool, today: Optional[date] = None) -> list:
+    """Every lot holding stock, in the order it should be issued (earliest expiry first).
+
+    Stock that predates batch tracking (``quantity`` beyond what batches hold) is
+    one more lot, governed by the item-level ``expiry_date``.
+    """
+    today = today or date.today()
+    lots = [
+        {"batch": b, "batch_number": b.batch_number, "expiry_date": b.expiry_date, "quantity": b.quantity}
+        for b in item.batches
+        if (b.quantity or 0) > 0
+    ]
+    unbatched = max((item.quantity or 0) - _batch_total(item), 0)
+    if unbatched:
+        lots.append({"batch": None, "batch_number": item.batch_no, "expiry_date": item.expiry_date,
+                     "quantity": unbatched})
+    if not include_expired:
+        lots = [lot for lot in lots if lot["expiry_date"] is None or lot["expiry_date"] >= today]
+    # Lots without an expiry go last; ties keep receipt order.
+    lots.sort(key=lambda lot: (lot["expiry_date"] is None, lot["expiry_date"] or date.max))
+    return lots
+
+
+def sellable_quantity(item: models.MedicineStock, today: Optional[date] = None) -> int:
+    return sum(lot["quantity"] for lot in _stock_lots(item, include_expired=False, today=today))
+
+
+def _consume_stock(
+    item: models.MedicineStock, quantity: int, include_expired: bool = False, batch_id: Optional[int] = None
+) -> list:
+    """Take ``quantity`` units out of stock and return which lots they came from."""
+    if batch_id is not None:
+        batch = next((b for b in item.batches if b.id == batch_id), None)
+        if batch is None:
+            raise HTTPException(status_code=404, detail="Batch not found for this item.")
+        if not include_expired and batch.expiry_date is not None and batch.expiry_date < date.today():
+            raise HTTPException(status_code=409, detail=f"Batch {batch.batch_number} has expired.")
+        if (batch.quantity or 0) < quantity:
+            raise HTTPException(
+                status_code=400, detail=f"Batch {batch.batch_number} holds only {batch.quantity} unit(s)."
+            )
+        lots = [{"batch": batch, "batch_number": batch.batch_number, "expiry_date": batch.expiry_date,
+                 "quantity": batch.quantity}]
+    else:
+        lots = _stock_lots(item, include_expired=include_expired)
+        available = sum(lot["quantity"] for lot in lots)
+        if available < quantity:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{item.name}: only {available} of {item.quantity} unit(s) are within expiry; "
+                    "expired stock cannot be dispensed."
+                ),
+            )
+
+    allocations, remaining = [], quantity
+    for lot in lots:
+        if remaining == 0:
+            break
+        take = min(lot["quantity"], remaining)
+        if lot["batch"] is not None:
+            lot["batch"].quantity -= take
+        allocations.append({
+            "batch_id": lot["batch"].id if lot["batch"] is not None else None,
+            "batch_number": lot["batch_number"],
+            "expiry_date": lot["expiry_date"].isoformat() if lot["expiry_date"] else None,
+            "quantity": take,
+        })
+        remaining -= take
+    item.quantity -= quantity
+    return allocations
+
+
+def receive_batch(db: Session, stock_id: int, payload: schemas.MedicineBatchCreate) -> models.MedicineBatch:
+    item = _get_or_404(db, models.MedicineStock, stock_id, "Stock item")
+    batch = _receive_into_batch(db, item, payload.batch_number, payload.expiry_date, payload.quantity, payload.notes)
+    db.add(models.StockTransaction(
+        medicine_id=item.id, type="Stock In", quantity=payload.quantity,
+        notes=payload.notes or f"Received batch {batch.batch_number}",
+        details={"batch_id": batch.id, "batch_number": batch.batch_number},
+    ))
+    db.commit()
+    db.refresh(batch)
+    return batch
+
+
+def _receive_into_batch(db: Session, item, batch_number: str, expiry_date, quantity: int, notes=None):
+    """Add units to the matching lot (same number and expiry) or open a new one."""
+    batch = next(
+        (b for b in item.batches if b.batch_number == batch_number and b.expiry_date == expiry_date), None
+    )
+    if batch is None:
+        batch = models.MedicineBatch(
+            medicine_id=item.id, batch_number=batch_number, expiry_date=expiry_date, quantity=0, notes=notes
+        )
+        item.batches.append(batch)
+    batch.quantity += quantity
+    item.quantity = (item.quantity or 0) + quantity
+    db.flush()
+    return batch
+
+
+def get_batches(db: Session, stock_id: int):
+    item = _get_or_404(db, models.MedicineStock, stock_id, "Stock item")
+    return item.batches
 
 
 # ============================
@@ -580,9 +750,23 @@ def _apply_percentage_totals(subtotal: float, discount_pct: float, gst_pct: floa
 
 
 def create_pharmacy_bill(db: Session, bill: schemas.PharmacyBillCreate):
-    if bill.patient_id is not None:
-        _require_patient(db, bill.patient_id)
-    if bill.patient_id is None and not (bill.patient_name or "").strip():
+    patient_id, payment_mode = bill.patient_id, bill.payment_mode
+    if bill.admission_id is not None:
+        # Charged to the inpatient stay and settled on the final IP bill.
+        admission = _get_or_404(db, models.IPAdmission, bill.admission_id, "IP admission")
+        if admission.status != "Admitted":
+            raise HTTPException(
+                status_code=409, detail="Only a current admission can be charged; this patient has left."
+            )
+        if patient_id is not None and patient_id != admission.patient_id:
+            raise HTTPException(status_code=422, detail="That admission belongs to a different patient.")
+        patient_id, payment_mode = admission.patient_id, constants.IP_CREDIT
+    elif payment_mode == constants.IP_CREDIT:
+        raise HTTPException(status_code=422, detail="IP Credit needs the admission to charge.")
+
+    if patient_id is not None:
+        _require_patient(db, patient_id)
+    if patient_id is None and not (bill.patient_name or "").strip():
         raise HTTPException(status_code=422, detail="Provide either a registered patient or a walk-in patient name.")
 
     subtotal = 0.0
@@ -590,11 +774,6 @@ def create_pharmacy_bill(db: Session, bill: schemas.PharmacyBillCreate):
 
     for item in bill.items:
         db_item = _get_or_404(db, models.MedicineStock, item.medicine_id, "Medicine")
-        if db_item.expiry_date is not None and db_item.expiry_date < date.today():
-            raise HTTPException(
-                status_code=409,
-                detail=f"{db_item.name} expired on {db_item.expiry_date.isoformat()} and cannot be dispensed.",
-            )
         if db_item.quantity < item.quantity:
             raise HTTPException(
                 status_code=400,
@@ -603,13 +782,14 @@ def create_pharmacy_bill(db: Session, bill: schemas.PharmacyBillCreate):
                     f"Remaining: {db_item.quantity}, Requested: {item.quantity}"
                 ),
             )
-        db_item.quantity -= item.quantity
+        allocations = _consume_stock(db_item, item.quantity)
         item_total = round(item.quantity * db_item.unit_price, 2)
         subtotal += item_total
 
         db.add(
             models.StockTransaction(
-                medicine_id=db_item.id, type="Sale", quantity=item.quantity, notes="Sold via pharmacy bill"
+                medicine_id=db_item.id, type="Sale", quantity=item.quantity, notes="Sold via pharmacy bill",
+                details={"allocations": allocations},
             )
         )
         bill_items.append(
@@ -619,19 +799,21 @@ def create_pharmacy_bill(db: Session, bill: schemas.PharmacyBillCreate):
                 quantity=item.quantity,
                 unit_price=db_item.unit_price,
                 total_price=item_total,
+                batches=allocations,
             )
         )
 
     subtotal, _, _, total = _apply_percentage_totals(subtotal, bill.discount, bill.gst)
 
     db_bill = models.PharmacyBill(
-        patient_id=bill.patient_id,
+        patient_id=patient_id,
         patient_name=bill.patient_name,
+        admission_id=bill.admission_id,
         subtotal=round(subtotal, 2),
         discount=bill.discount,
         gst=bill.gst,
         total=round(total, 2),
-        payment_mode=bill.payment_mode,
+        payment_mode=payment_mode,
         payment_details=bill.payment_details,
         details=bill.details or {},
         items=bill_items,
@@ -1135,22 +1317,10 @@ def create_lab_bill(db: Session, bill: schemas.LabBillCreate):
     return db_bill
 
 
-def create_lab_bill_from_orders(db: Session, payload: schemas.LabBillFromOrders):
-    """Bill one or more lab orders and link the orders to the new bill."""
-    orders = []
-    for order_id in payload.order_ids:
-        order = _get_or_404(db, models.LabOrder, order_id, "Lab order")
-        if order.bill_id:
-            raise HTTPException(status_code=409, detail=f"Order #{order_id} is already billed.")
-        orders.append(order)
-
-    patient_ids = {o.patient_id for o in orders}
-    if len(patient_ids) > 1:
-        raise HTTPException(status_code=422, detail="All orders on a single bill must belong to the same patient.")
-
-    items, seen_panels, subtotal = [], set(), 0.0
+def price_lab_orders(db: Session, orders) -> tuple:
+    """Bill lines for lab orders: one line per test, a panel charged once at panel price."""
+    lines, seen_panels, subtotal = [], set(), 0.0
     for order in orders:
-        # A panel is charged once even though it produces several member orders.
         if order.panel_id:
             if order.panel_id in seen_panels:
                 continue
@@ -1159,18 +1329,36 @@ def create_lab_bill_from_orders(db: Session, payload: schemas.LabBillFromOrders)
             if panel is None:
                 continue
             price = panel.price or 0.0
-            items.append(models.LabBillItem(test_id=panel.id, test_name=panel.test_name, price=price))
+            lines.append({"test_id": panel.id, "test_name": panel.test_name, "price": price})
             subtotal += price
             continue
 
         test = db.query(models.LabTestMaster).filter(models.LabTestMaster.id == order.test_id).first()
         price = (test.price if test else 0.0) or 0.0
-        items.append(
-            models.LabBillItem(
-                test_id=order.test_id, test_name=test.test_name if test else "Unknown test", price=price
-            )
-        )
+        lines.append({"test_id": order.test_id, "test_name": test.test_name if test else "Unknown test",
+                      "price": price})
         subtotal += price
+    return lines, round(subtotal, 2)
+
+
+def create_lab_bill_from_orders(db: Session, payload: schemas.LabBillFromOrders):
+    """Bill one or more lab orders and link the orders to the new bill."""
+    orders = []
+    for order_id in payload.order_ids:
+        order = _get_or_404(db, models.LabOrder, order_id, "Lab order")
+        if order.bill_id:
+            raise HTTPException(status_code=409, detail=f"Order #{order_id} is already billed.")
+
+        if order.ip_bill_id:
+            raise HTTPException(status_code=409, detail=f"Order #{order_id} is on IP bill #{order.ip_bill_id}.")
+        orders.append(order)
+
+    patient_ids = {o.patient_id for o in orders}
+    if len(patient_ids) > 1:
+        raise HTTPException(status_code=422, detail="All orders on a single bill must belong to the same patient.")
+
+    lines, subtotal = price_lab_orders(db, orders)
+    items = [models.LabBillItem(**line) for line in lines]
 
     subtotal, _, _, total = _apply_percentage_totals(subtotal, payload.discount, payload.gst)
 
@@ -1361,7 +1549,73 @@ def get_lab_stats(db: Session) -> dict:
 # ============================
 # OP / IP bills
 # ============================
-def create_op_bill(db: Session, bill: schemas.OPBillCreate):
+def _settlement_status(total: float, paid: float) -> str:
+    if paid <= 0.005:
+        return "Pending"
+    return "Paid" if paid + 0.005 >= total else "Partial"
+
+
+def _set_initial_payment(db_bill, amount_paid: Optional[float], payment_mode: str, actor: Optional[str]) -> None:
+    """Record what was collected when the bill was raised (the full total unless stated)."""
+    total = db_bill.total or 0.0
+    paid = total if amount_paid is None else round(amount_paid, 2)
+    if paid - total > 0.005:
+        raise HTTPException(status_code=422, detail=f"Amount paid ({paid}) exceeds the bill total ({total}).")
+    db_bill.amount_paid = paid
+    db_bill.payment_status = _settlement_status(total, paid)
+    db_bill.payment_history = (
+        [{"amount": paid, "payment_mode": payment_mode, "at": _utcnow().isoformat(), "by": actor}] if paid > 0 else []
+    )
+
+
+def record_bill_payment(db: Session, model, bill_id: int, payload: schemas.BillPaymentCreate, actor: Optional[str]):
+    db_bill = _get_or_404(db, model, bill_id, "Bill")
+    if db_bill.payment_status == "Cancelled":
+        raise HTTPException(status_code=409, detail="A cancelled bill cannot take payments.")
+    due = db_bill.amount_due
+    if due <= 0:
+        raise HTTPException(status_code=409, detail="This bill is already fully paid.")
+    if payload.amount - due > 0.005:
+        raise HTTPException(status_code=422, detail=f"Payment ({payload.amount}) exceeds the amount due ({due}).")
+    db_bill.amount_paid = round((db_bill.amount_paid or 0.0) + payload.amount, 2)
+    db_bill.payment_status = _settlement_status(db_bill.total or 0.0, db_bill.amount_paid)
+    db_bill.payment_history = list(db_bill.payment_history or []) + [{
+        "amount": round(payload.amount, 2), "payment_mode": payload.payment_mode,
+        "at": _utcnow().isoformat(), "by": actor, "notes": payload.notes,
+    }]
+    db.commit()
+    db.refresh(db_bill)
+    return db_bill
+
+
+def cancel_bill(db: Session, model, bill_id: int, reason: str, actor: Optional[str]):
+    """Void an OP/IP bill: it leaves revenue and releases whatever it billed."""
+    db_bill = _get_or_404(db, model, bill_id, "Bill")
+    if db_bill.payment_status == "Cancelled":
+        raise HTTPException(status_code=409, detail="This bill is already cancelled.")
+    refund_due = round(db_bill.amount_paid or 0.0, 2)
+    db_bill.payment_status = "Cancelled"
+    db_bill.cancelled_reason = reason
+    db_bill.payment_history = list(db_bill.payment_history or []) + [{
+        "event": "cancelled", "reason": reason, "refund_due": refund_due, "at": _utcnow().isoformat(), "by": actor,
+    }]
+    if model is models.OPBill and db_bill.token_id:
+        token = db.query(models.OPToken).filter(models.OPToken.id == db_bill.token_id).first()
+        if token is not None:
+            token.is_billed = False
+    if model is models.IPBill:
+        db.query(models.LabOrder).filter(models.LabOrder.ip_bill_id == db_bill.id).update(
+            {models.LabOrder.ip_bill_id: None}, synchronize_session=False
+        )
+        db.query(models.PharmacyBill).filter(models.PharmacyBill.ip_bill_id == db_bill.id).update(
+            {models.PharmacyBill.ip_bill_id: None}, synchronize_session=False
+        )
+    db.commit()
+    db.refresh(db_bill)
+    return db_bill
+
+
+def create_op_bill(db: Session, bill: schemas.OPBillCreate, actor: Optional[str] = None):
     _require_patient(db, bill.patient_id)
     db_token = None
     if bill.token_id:
@@ -1375,11 +1629,12 @@ def create_op_bill(db: Session, bill: schemas.OPBillCreate):
     subtotal, _, _, total = _apply_percentage_totals(subtotal, bill.discount, bill.gst)
 
     db_bill = models.OPBill(
-        **bill.model_dump(exclude={"other_charges"}),
+        **bill.model_dump(exclude={"other_charges", "amount_paid"}),
         other_charges=[c.model_dump() for c in bill.other_charges],
         subtotal=round(subtotal, 2),
         total=round(total, 2),
     )
+    _set_initial_payment(db_bill, bill.amount_paid, bill.payment_mode, actor)
     db.add(db_bill)
 
     if db_token is not None:
@@ -1397,8 +1652,89 @@ def get_op_bills(db: Session, patient_id: Optional[int] = None, skip: int = 0, l
     return query.order_by(models.OPBill.bill_date.desc()).offset(skip).limit(limit).all()
 
 
-def create_ip_bill(db: Session, bill: schemas.IPBillCreate):
+def _admission_window(admission: models.IPAdmission):
+    return admission.admission_date, admission.discharge_date or _utcnow()
+
+
+def _unbilled_lab_orders(db: Session, admission: models.IPAdmission):
+    """Lab work ordered during the stay that no lab bill or IP bill has charged yet."""
+    start, end = _admission_window(admission)
+    query = db.query(models.LabOrder).filter(
+        models.LabOrder.patient_id == admission.patient_id,
+        models.LabOrder.bill_id.is_(None),
+        models.LabOrder.ip_bill_id.is_(None),
+        models.LabOrder.status != "Cancelled",
+        models.LabOrder.order_date <= end,
+    )
+    if start is not None:
+        query = query.filter(models.LabOrder.order_date >= start)
+    return query.order_by(models.LabOrder.order_date).all()
+
+
+def _unbilled_pharmacy(db: Session, admission: models.IPAdmission):
+    return (
+        db.query(models.PharmacyBill)
+        .filter(models.PharmacyBill.admission_id == admission.id, models.PharmacyBill.ip_bill_id.is_(None))
+        .order_by(models.PharmacyBill.bill_date)
+        .all()
+    )
+
+
+def ip_bill_preview(db: Session, admission_id: int) -> dict:
+    """Everything the final IP bill should charge, computed from the stay itself."""
+    detail = get_ip_admission_detail(db, admission_id)
+    admission = detail["admission"]
+    days = max(detail["length_of_stay_days"], 1)
+    room = detail["billable_room_charge"]
+
+    lab_orders = _unbilled_lab_orders(db, admission)
+    lab_lines, lab_total = price_lab_orders(db, lab_orders)
+    pharmacy = _unbilled_pharmacy(db, admission)
+
+    return {
+        "admission_id": admission.id,
+        "patient_id": admission.patient_id,
+        "days_stayed": days,
+        "room_charge_per_day": round(room / days, 2),
+        "room_charges": room,
+        "lab_charges": lab_total,
+        "lab_order_ids": [o.id for o in lab_orders],
+        "lab_lines": lab_lines,
+        "pharmacy_charges": round(sum(p.total or 0.0 for p in pharmacy), 2),
+        "pharmacy_bill_ids": [p.id for p in pharmacy],
+        "pharmacy_lines": [{"bill_id": p.id, "bill_date": p.bill_date, "total": p.total} for p in pharmacy],
+        "existing_ip_bills": [
+            b.id for b in admission.ip_bills if b.payment_status != "Cancelled"
+        ],
+    }
+
+
+def create_ip_bill(db: Session, bill: schemas.IPBillCreate, actor: Optional[str] = None):
     _require_patient(db, bill.patient_id)
+    lab_orders, pharmacy_bills = [], []
+    if bill.admission_id is not None:
+        admission = _get_or_404(db, models.IPAdmission, bill.admission_id, "IP admission")
+        if admission.patient_id != bill.patient_id:
+            raise HTTPException(status_code=422, detail="That admission belongs to a different patient.")
+        if bill.lab_order_ids:
+            open_labs = {o.id: o for o in _unbilled_lab_orders(db, admission)}
+            stale = [i for i in bill.lab_order_ids if i not in open_labs]
+            if stale:
+                raise HTTPException(
+                    status_code=409, detail=f"Lab order(s) {stale} are already billed or not part of this stay."
+                )
+            lab_orders = [open_labs[i] for i in bill.lab_order_ids]
+        if bill.pharmacy_bill_ids:
+            open_pharmacy = {p.id: p for p in _unbilled_pharmacy(db, admission)}
+            stale = [i for i in bill.pharmacy_bill_ids if i not in open_pharmacy]
+            if stale:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Pharmacy bill(s) {stale} are already on an IP bill or not charged to this stay.",
+                )
+            pharmacy_bills = [open_pharmacy[i] for i in bill.pharmacy_bill_ids]
+    elif bill.lab_order_ids or bill.pharmacy_bill_ids:
+        raise HTTPException(status_code=422, detail="Linking lab or pharmacy charges needs the admission.")
     room_charges = bill.room_charge_per_day * bill.days_stayed
     other_total = sum(c.amount for c in bill.other_charges)
     subtotal = (
@@ -1412,13 +1748,20 @@ def create_ip_bill(db: Session, bill: schemas.IPBillCreate):
     subtotal, _, _, total = _apply_percentage_totals(subtotal, bill.discount, bill.gst)
 
     db_bill = models.IPBill(
-        **bill.model_dump(exclude={"other_charges"}),
+        **bill.model_dump(exclude={"other_charges", "amount_paid", "lab_order_ids", "pharmacy_bill_ids"}),
         room_charges=room_charges,
         other_charges=[c.model_dump() for c in bill.other_charges],
         subtotal=round(subtotal, 2),
         total=round(total, 2),
     )
+    _set_initial_payment(db_bill, bill.amount_paid, bill.payment_mode, actor)
     db.add(db_bill)
+    db.flush()
+    # Lock what this bill charged so neither a lab bill nor a later IP bill repeats it.
+    for order in lab_orders:
+        order.ip_bill_id = db_bill.id
+    for pharmacy_bill in pharmacy_bills:
+        pharmacy_bill.ip_bill_id = db_bill.id
     db.commit()
     db.refresh(db_bill)
     return db_bill
@@ -2080,6 +2423,58 @@ def transfer_patient(
     return admission
 
 
+def discharge_clearance(db: Session, admission_id: int) -> dict:
+    """What is still open before this patient can leave.
+
+    ``warning`` items should be settled first; ``info`` items are handled by the
+    discharge itself. ``ready`` is true when nothing is at warning level.
+    """
+    admission = _get_or_404(db, models.IPAdmission, admission_id, "IP admission")
+    preview = ip_bill_preview(db, admission_id)
+    start, end = _admission_window(admission)
+
+    pending_labs = (
+        db.query(models.LabOrder)
+        .filter(
+            models.LabOrder.patient_id == admission.patient_id,
+            models.LabOrder.status.notin_(("Verified", "Cancelled")),
+            models.LabOrder.order_date <= end,
+            *( (models.LabOrder.order_date >= start,) if start is not None else () ),
+        )
+        .all()
+    )
+    bills = [b for b in admission.ip_bills if b.payment_status != "Cancelled"]
+    dues = round(sum(b.amount_due for b in bills), 2)
+    unbilled = round(preview["lab_charges"] + preview["pharmacy_charges"], 2)
+    active_meds = [o for o in admission.medication_orders if o.status in ("Active", "On Hold")]
+
+    def check(key, label, ok, detail, level="warning"):
+        return {"key": key, "label": label, "status": "ok" if ok else level, "detail": detail}
+
+    checks = [
+        check("discharge_summary", "Discharge summary", admission.discharge_summary is not None,
+              "Saved" if admission.discharge_summary is not None else "Not written yet"),
+        check("lab_results", "Lab results", not pending_labs,
+              "All reported" if not pending_labs else f"{len(pending_labs)} order(s) still pending"),
+        check("unbilled_charges", "Lab & pharmacy charges", unbilled == 0,
+              "All on a bill" if unbilled == 0 else f"Rs {unbilled} not yet on the IP bill"),
+        check("final_bill", "Final IP bill", bool(bills),
+              f"{len(bills)} bill(s) raised" if bills else "No IP bill raised"),
+        check("dues", "Payment", dues == 0, "Settled" if dues == 0 else f"Rs {dues} outstanding"),
+        check("medications", "Medication orders", not active_meds,
+              "None active" if not active_meds else f"{len(active_meds)} active; will be stopped at discharge",
+              level="info"),
+    ]
+    return {
+        "admission_id": admission.id,
+        "status": admission.status,
+        "ready": all(item["status"] != "warning" for item in checks),
+        "outstanding_amount": dues,
+        "unbilled_amount": unbilled,
+        "checks": checks,
+    }
+
+
 def discharge_patient(
     db: Session,
     admission_id: int,
@@ -2107,6 +2502,18 @@ def discharge_patient(
             status_code=409,
             detail="A discharge summary is required before discharge. Save the summary first, "
                    "or send require_summary=false to override.",
+        )
+
+    clearance = discharge_clearance(db, admission.id)
+    open_items = [
+        f"{c['label']}: {c['detail']}" for c in clearance["checks"]
+        if c["status"] == "warning" and not (c["key"] == "discharge_summary" and payload.summary is not None)
+    ]
+    if payload.require_clearance and open_items:
+        raise HTTPException(
+            status_code=409,
+            detail="Discharge clearance is incomplete — " + "; ".join(open_items)
+                   + ". Resolve these or send require_clearance=false to discharge anyway.",
         )
 
     if payload.summary is not None:
@@ -2148,7 +2555,8 @@ def discharge_patient(
         action="PATIENT_DISCHARGED", entity_type="ip_admission",
         actor=actor, actor_role=actor_role, patient_id=admission.patient_id,
         details=f"{payload.discharge_type} discharge"
-                f"{' with summary' if existing_summary else ' without a summary'}",
+                f"{' with summary' if existing_summary or payload.summary is not None else ' without a summary'}"
+                f"{'; clearance complete' if not open_items else '; open at discharge: ' + '; '.join(open_items)}",
     )
     db.commit()
     db.refresh(admission)
@@ -2230,6 +2638,15 @@ def delete_ip_admission(db: Session, admission_id: int):
             status_code=409,
             detail="An active admission cannot be deleted. Discharge the patient first.",
         )
+    # Charting is a medico-legal record: deleting the admission would cascade it away.
+    if db_admission.nursing_notes or db_admission.medication_orders or db_admission.discharge_summary:
+        raise HTTPException(
+            status_code=409,
+            detail="This admission has clinical records (nursing notes, medication orders or a discharge "
+                   "summary) that must be retained; it cannot be deleted.",
+        )
+    if any(b.payment_status != "Cancelled" for b in db_admission.ip_bills):
+        raise HTTPException(status_code=409, detail="Cancel this admission's IP bill(s) before deleting it.")
     db.query(models.IPBill).filter(models.IPBill.admission_id == admission_id).update(
         {models.IPBill.admission_id: None}, synchronize_session=False
     )
@@ -2900,6 +3317,10 @@ def global_search(db: Session, query: str, limit_per_type: int = 8):
 # ============================
 # A cancelled bill is not revenue (and is not counted as a bill raised).
 _LAB_BILL_COUNTS = (models.LabBill.status != "Cancelled",)
+_OP_BILL_COUNTS = (models.OPBill.payment_status != "Cancelled",)
+_IP_BILL_COUNTS = (models.IPBill.payment_status != "Cancelled",)
+# A sale charged to an admission ("IP Credit") is revenue on the IP bill, not at the counter.
+_PHARMACY_COUNTS = (models.PharmacyBill.admission_id.is_(None),)
 
 
 def _sum_between(db: Session, amount_column, date_column, start: datetime, end: datetime, *filters) -> float:
@@ -2923,15 +3344,15 @@ def _count_between(db: Session, model, column, start: datetime, end: datetime, *
 def get_daily_report(db: Session, report_date: date):
     start, end = _day_bounds(report_date)
 
-    op_revenue = _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end)
-    ip_revenue = _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end)
-    pharmacy_revenue = _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end)
+    op_revenue = _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end, *_OP_BILL_COUNTS)
+    ip_revenue = _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end, *_IP_BILL_COUNTS)
+    pharmacy_revenue = _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end, *_PHARMACY_COUNTS)
     lab_revenue = _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
 
     total_bills = (
-        _count_between(db, models.OPBill, models.OPBill.bill_date, start, end)
-        + _count_between(db, models.IPBill, models.IPBill.bill_date, start, end)
-        + _count_between(db, models.PharmacyBill, models.PharmacyBill.bill_date, start, end)
+        _count_between(db, models.OPBill, models.OPBill.bill_date, start, end, *_OP_BILL_COUNTS)
+        + _count_between(db, models.IPBill, models.IPBill.bill_date, start, end, *_IP_BILL_COUNTS)
+        + _count_between(db, models.PharmacyBill, models.PharmacyBill.bill_date, start, end, *_PHARMACY_COUNTS)
         + _count_between(db, models.LabBill, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
     )
     total_patients = (
@@ -2977,14 +3398,14 @@ def get_yearly_report(db: Session, year: int):
     monthly_data = []
     for month in range(1, 13):
         start, end = _month_bounds(year, month)
-        op_rev = _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end)
-        ip_rev = _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end)
-        ph_rev = _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end)
+        op_rev = _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end, *_OP_BILL_COUNTS)
+        ip_rev = _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end, *_IP_BILL_COUNTS)
+        ph_rev = _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end, *_PHARMACY_COUNTS)
         lab_rev = _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
         bill_count = (
-            _count_between(db, models.OPBill, models.OPBill.bill_date, start, end)
-            + _count_between(db, models.IPBill, models.IPBill.bill_date, start, end)
-            + _count_between(db, models.PharmacyBill, models.PharmacyBill.bill_date, start, end)
+            _count_between(db, models.OPBill, models.OPBill.bill_date, start, end, *_OP_BILL_COUNTS)
+            + _count_between(db, models.IPBill, models.IPBill.bill_date, start, end, *_IP_BILL_COUNTS)
+            + _count_between(db, models.PharmacyBill, models.PharmacyBill.bill_date, start, end, *_PHARMACY_COUNTS)
             + _count_between(db, models.LabBill, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
         )
         monthly_data.append(
@@ -3002,18 +3423,18 @@ def get_yearly_report(db: Session, year: int):
 
 
 def get_revenue_breakdown(db: Session, start_date: Optional[date] = None, end_date: Optional[date] = None):
-    def total(model, column):
-        query = db.query(func.coalesce(func.sum(model.total), 0.0))
+    def total(model, column, *filters):
+        query = db.query(func.coalesce(func.sum(model.total), 0.0)).filter(*filters)
         if start_date:
             query = query.filter(column >= datetime.combine(start_date, datetime.min.time()))
         if end_date:
             query = query.filter(column <= datetime.combine(end_date, datetime.max.time()))
         return float(query.scalar() or 0.0)
 
-    op = total(models.OPBill, models.OPBill.bill_date)
-    ip = total(models.IPBill, models.IPBill.bill_date)
-    ph = total(models.PharmacyBill, models.PharmacyBill.bill_date)
-    lab = total(models.LabBill, models.LabBill.bill_date)
+    op = total(models.OPBill, models.OPBill.bill_date, *_OP_BILL_COUNTS)
+    ip = total(models.IPBill, models.IPBill.bill_date, *_IP_BILL_COUNTS)
+    ph = total(models.PharmacyBill, models.PharmacyBill.bill_date, *_PHARMACY_COUNTS)
+    lab = total(models.LabBill, models.LabBill.bill_date, *_LAB_BILL_COUNTS)
 
     return {
         "op_total": round(op, 2),
@@ -3039,7 +3460,7 @@ def get_doctor_wise_report(db: Session):
             func.count(models.OPBill.id),
             func.coalesce(func.sum(models.OPBill.total), 0.0),
         )
-        .filter(models.OPBill.doctor_name.isnot(None), models.OPBill.doctor_name != "")
+        .filter(models.OPBill.doctor_name.isnot(None), models.OPBill.doctor_name != "", *_OP_BILL_COUNTS)
         .group_by(models.OPBill.doctor_name)
         .all()
     ):
@@ -3053,7 +3474,7 @@ def get_doctor_wise_report(db: Session):
             func.count(models.IPBill.id),
             func.coalesce(func.sum(models.IPBill.total), 0.0),
         )
-        .filter(models.IPBill.doctor_name.isnot(None), models.IPBill.doctor_name != "")
+        .filter(models.IPBill.doctor_name.isnot(None), models.IPBill.doctor_name != "", *_IP_BILL_COUNTS)
         .group_by(models.IPBill.doctor_name)
         .all()
     ):
@@ -3101,7 +3522,7 @@ def get_department_wise_report(db: Session):
             func.count(models.OPBill.id),
             func.coalesce(func.sum(models.OPBill.total), 0.0),
         )
-        .filter(models.OPBill.department.isnot(None), models.OPBill.department != "")
+        .filter(models.OPBill.department.isnot(None), models.OPBill.department != "", *_OP_BILL_COUNTS)
         .group_by(models.OPBill.department)
         .all()
     )
@@ -3264,10 +3685,10 @@ def get_dashboard_stats(db: Session):
     today = date.today()
     start, end = _day_bounds(today)
 
-    pharma_today = _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end)
+    pharma_today = _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end, *_PHARMACY_COUNTS)
     lab_today = _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
-    op_revenue = _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end)
-    ip_revenue = _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end)
+    op_revenue = _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end, *_OP_BILL_COUNTS)
+    ip_revenue = _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end, *_IP_BILL_COUNTS)
 
     return {
         "today_patients": _count_between(db, models.Patient, models.Patient.created_at, start, end),
@@ -3292,6 +3713,14 @@ def get_dashboard_stats(db: Session):
         .filter(models.MedicineStock.quantity <= models.MedicineStock.min_stock_level)
         .scalar()
         or 0,
+        "outstanding_dues": round(
+            sum(
+                float(db.query(func.coalesce(func.sum(model.total - model.amount_paid), 0.0))
+                      .filter(model.payment_status.in_(("Pending", "Partial"))).scalar() or 0.0)
+                for model in (models.OPBill, models.IPBill)
+            ),
+            2,
+        ),
     }
 
 
@@ -3304,9 +3733,9 @@ def get_dashboard_charts(db: Session):
         day = today - timedelta(days=offset)
         start, end = _day_bounds(day)
         value = (
-            _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end)
-            + _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end)
-            + _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end)
+            _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end, *_OP_BILL_COUNTS)
+            + _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end, *_IP_BILL_COUNTS)
+            + _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end, *_PHARMACY_COUNTS)
             + _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
         )
         daily_revenue.append({"label": day.strftime("%d %b"), "value": round(value, 2)})
@@ -3316,9 +3745,9 @@ def get_dashboard_charts(db: Session):
         start, end = _month_bounds(year, month)
         label = start.strftime("%b %Y")
         value = (
-            _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end)
-            + _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end)
-            + _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end)
+            _sum_between(db, models.OPBill.total, models.OPBill.bill_date, start, end, *_OP_BILL_COUNTS)
+            + _sum_between(db, models.IPBill.total, models.IPBill.bill_date, start, end, *_IP_BILL_COUNTS)
+            + _sum_between(db, models.PharmacyBill.total, models.PharmacyBill.bill_date, start, end, *_PHARMACY_COUNTS)
             + _sum_between(db, models.LabBill.total, models.LabBill.bill_date, start, end, *_LAB_BILL_COUNTS)
         )
         monthly_revenue.append({"label": label, "value": round(value, 2)})

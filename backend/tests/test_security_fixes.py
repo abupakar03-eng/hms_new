@@ -119,6 +119,10 @@ class TestSessionRevocation:
 
         assert client.get("/users/me", headers=_bearer(old["access_token"])).status_code == 401
         assert client.post("/refresh-token", json={"refresh_token": old["refresh_token"]}).status_code == 401
+        # The caller's own session continues on the pair the change returned.
+        assert client.get("/users/me", headers=_bearer(changed.json()["access_token"])).status_code == 200
+        refreshed = client.post("/refresh-token", json={"refresh_token": changed.json()["refresh_token"]})
+        assert refreshed.status_code == 200
         fresh = _login(client, "rotating_doc", "Staff@Pass2")
         assert client.get("/users/me", headers=_bearer(fresh["access_token"])).status_code == 200
 

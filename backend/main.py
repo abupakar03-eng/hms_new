@@ -306,6 +306,8 @@ IPD_ADMIN = ("Admin",)
 ROLE_POLICY = (
     # path prefix, allowed roles, methods it applies to
     ("/users/me/password", None, {"POST"}),          # anyone may change their own password
+    ("/patients", ADMIN, {"DELETE"}),
+    ("/casesheets", ("Admin", "Doctor"), {"DELETE"}),
     ("/users", ADMIN, {"POST", "PUT", "PATCH", "DELETE"}),
     ("/audit-logs", ADMIN, {"POST", "PUT", "PATCH", "DELETE"}),
     ("/backup", ADMIN, {"GET", "POST"}),
@@ -336,8 +338,14 @@ ROLE_POLICY = (
     # /ip-admissions rule below would otherwise let Receptionist write orders.
     (re.compile(r"^/ip-admissions/[^/]+/(nursing-notes|medications)(/|$)"), IPD_CLINICAL, {"POST", "PUT", "PATCH", "DELETE"}),
     (re.compile(r"^/ip-admissions/[^/]+/discharge-summary(/|$)"), ("Admin", "Doctor"), {"POST", "PUT", "PATCH", "DELETE"}),
+    # Removing a stay, a patient or a casesheet destroys clinical history.
+    (re.compile(r"^/ip-admissions/[^/]+/?$"), ADMIN, {"DELETE"}),
     ("/ip-admissions", ("Admin", "Doctor", "Nurse", "Receptionist"), {"POST", "PUT", "PATCH", "DELETE"}),
 )
+
+
+def _actor(request: Request) -> Optional[str]:
+    return getattr(request.state, "username", None)
 
 
 def required_staff_roles(method: str, path: str):
@@ -676,7 +684,7 @@ def portal_insurance(
     }
 
 
-@app.post("/users/me/password", response_model=schemas.MessageResponse, tags=["auth"])
+@app.post("/users/me/password", response_model=schemas.PasswordChangeResponse, tags=["auth"])
 def change_my_password(
     payload: schemas.PasswordChange,
     current_user: models.User = Depends(auth.get_current_user),
@@ -695,7 +703,15 @@ def change_my_password(
         )
     )
     db.commit()
-    return {"message": "Password updated successfully."}
+    claims = {"sub": current_user.username, "role": current_user.role}
+    return {
+        "message": "Password updated successfully. Other sessions have been signed out.",
+        "access_token": auth.create_access_token(data=claims),
+        "token_type": "bearer",
+        "refresh_token": auth.create_refresh_token(data=claims),
+        "expires_in": auth.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "role": current_user.role,
+    }
 
 
 @app.get("/security/status", tags=["auth"])
@@ -1015,6 +1031,16 @@ def expiring_items(within_days: int = Query(90, ge=1, le=3650), db: Session = De
     return crud.expiring_items(db, within_days=within_days)
 
 
+@app.get("/inventory/{stock_id}/batches", response_model=List[schemas.MedicineBatchResponse], tags=["inventory"])
+def read_batches(stock_id: int, db: Session = Depends(get_db)):
+    return crud.get_batches(db, stock_id)
+
+
+@app.post("/inventory/{stock_id}/batches", response_model=schemas.MedicineBatchResponse, tags=["inventory"])
+def receive_batch(stock_id: int, payload: schemas.MedicineBatchCreate, db: Session = Depends(get_db)):
+    return crud.receive_batch(db, stock_id, payload)
+
+
 @app.post("/inventory/adjust/", response_model=schemas.MedicineStock, tags=["inventory"])
 def adjust_inventory_quantity(transaction: schemas.StockTransactionCreate, db: Session = Depends(get_db)):
     return crud.update_medicine_quantity(db=db, transaction=transaction)
@@ -1083,8 +1109,18 @@ def update_lab_bill_status(
 # OP / IP billing
 # ============================
 @app.post("/billing/op/", response_model=schemas.OPBillResponse, tags=["billing"])
-def create_op_bill(bill: schemas.OPBillCreate, db: Session = Depends(get_db)):
-    return crud.create_op_bill(db=db, bill=bill)
+def create_op_bill(bill: schemas.OPBillCreate, request: Request, db: Session = Depends(get_db)):
+    return crud.create_op_bill(db=db, bill=bill, actor=_actor(request))
+
+
+@app.post("/billing/op/{bill_id}/payments", response_model=schemas.OPBillResponse, tags=["billing"])
+def pay_op_bill(bill_id: int, payload: schemas.BillPaymentCreate, request: Request, db: Session = Depends(get_db)):
+    return crud.record_bill_payment(db, models.OPBill, bill_id, payload, _actor(request))
+
+
+@app.post("/billing/op/{bill_id}/cancel", response_model=schemas.OPBillResponse, tags=["billing"])
+def cancel_op_bill(bill_id: int, payload: schemas.BillCancelRequest, request: Request, db: Session = Depends(get_db)):
+    return crud.cancel_bill(db, models.OPBill, bill_id, payload.reason, _actor(request))
 
 
 @app.get("/billing/op/", response_model=List[schemas.OPBillResponse], tags=["billing"])
@@ -1093,8 +1129,18 @@ def read_op_bills(patient_id: Optional[int] = None, db: Session = Depends(get_db
 
 
 @app.post("/billing/ip/", response_model=schemas.IPBillResponse, tags=["billing"])
-def create_ip_bill(bill: schemas.IPBillCreate, db: Session = Depends(get_db)):
-    return crud.create_ip_bill(db=db, bill=bill)
+def create_ip_bill(bill: schemas.IPBillCreate, request: Request, db: Session = Depends(get_db)):
+    return crud.create_ip_bill(db=db, bill=bill, actor=_actor(request))
+
+
+@app.post("/billing/ip/{bill_id}/payments", response_model=schemas.IPBillResponse, tags=["billing"])
+def pay_ip_bill(bill_id: int, payload: schemas.BillPaymentCreate, request: Request, db: Session = Depends(get_db)):
+    return crud.record_bill_payment(db, models.IPBill, bill_id, payload, _actor(request))
+
+
+@app.post("/billing/ip/{bill_id}/cancel", response_model=schemas.IPBillResponse, tags=["billing"])
+def cancel_ip_bill(bill_id: int, payload: schemas.BillCancelRequest, request: Request, db: Session = Depends(get_db)):
+    return crud.cancel_bill(db, models.IPBill, bill_id, payload.reason, _actor(request))
 
 
 @app.get("/billing/ip/", response_model=List[schemas.IPBillResponse], tags=["billing"])
@@ -1367,6 +1413,19 @@ def discharge_patient_endpoint(
     current_user: models.User = Depends(auth.get_current_user),
 ):
     return crud.discharge_patient(db, admission_id, payload, actor=current_user.username, actor_role=current_user.role)
+
+
+@app.get("/ip-admissions/{admission_id}/bill-preview", response_model=schemas.IPBillPreview, tags=["ipd"])
+def ip_bill_preview_endpoint(admission_id: int, db: Session = Depends(get_db)):
+    """Room, lab and pharmacy charges for the stay that no bill has charged yet."""
+    return crud.ip_bill_preview(db, admission_id)
+
+
+@app.get(
+    "/ip-admissions/{admission_id}/discharge-clearance", response_model=schemas.DischargeClearance, tags=["ipd"]
+)
+def discharge_clearance_endpoint(admission_id: int, db: Session = Depends(get_db)):
+    return crud.discharge_clearance(db, admission_id)
 
 
 @app.delete("/ip-admissions/{admission_id}", response_model=schemas.MessageResponse, tags=["ipd"])
